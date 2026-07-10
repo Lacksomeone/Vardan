@@ -1,7 +1,6 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
-// https://vite.dev/config/
 export default defineConfig({
   plugins: [react()],
   server: {
@@ -11,5 +10,19 @@ export default defineConfig({
         changeOrigin: true
       }
     }
+  },
+  build: {
+    // Code splitting — vendor libs in separate chunks
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          'react-vendor': ['react', 'react-dom', 'react-router-dom'],
+          'charts': ['recharts'],
+          'icons': ['lucide-react'],
+        }
+      }
+    },
+    // Raise warning limit 
+    chunkSizeWarningLimit: 600,
   }
 })

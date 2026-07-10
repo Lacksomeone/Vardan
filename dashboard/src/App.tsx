@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Link, Navigate, useLocation } from 'react-router-dom';
-import { LayoutDashboard, Users, Calendar, HelpCircle, Smartphone, LogOut, Sun, Moon, Plus, Wifi } from 'lucide-react';
+import { LayoutDashboard, Users, Calendar, HelpCircle, Smartphone, LogOut, Sun, Moon, Plus, Wifi, Loader2, RefreshCcw } from 'lucide-react';
 
 // Import Pages
 import Login from './pages/Login';
@@ -186,6 +186,8 @@ export default function App() {
   const [token, setToken] = useState<string | null>(localStorage.getItem('token'));
   const [user, setUser] = useState<{ name: string; username: string; role: string } | null>(null);
   const [loading, setLoading] = useState(!!token);
+  const [wakeMsg, setWakeMsg] = useState('Connecting to server...');
+  const [dots, setDots] = useState(0);
 
   useEffect(() => {
     if (!token) {
@@ -193,26 +195,40 @@ export default function App() {
       return;
     }
 
+    let retryTimer: ReturnType<typeof setTimeout>;
+    let attempts = 0;
+    const msgs = [
+      'Connecting to server...',
+      'Server waking up (free tier)...',
+      'Almost there...',
+      'Hang on, nearly ready...',
+      'Still starting up...',
+    ];
+
     const checkAuth = async () => {
       try {
+        setWakeMsg(msgs[Math.min(attempts, msgs.length - 1)]);
+        attempts++;
         const res = await fetch('/api/auth/me', {
           headers: { Authorization: `Bearer ${token}` }
         });
         if (res.ok) {
           const data = await res.json();
           setUser(data.user);
+          setLoading(false);
         } else {
-          // Token expired or invalid
           handleLogout();
+          setLoading(false);
         }
       } catch (err) {
-        console.error(err);
-      } finally {
-        setLoading(false);
+        // Server not ready — retry in 3s
+        retryTimer = setTimeout(checkAuth, 3000);
       }
     };
 
+    const dotsTimer = setInterval(() => setDots(d => (d + 1) % 4), 500);
     checkAuth();
+    return () => { clearTimeout(retryTimer); clearInterval(dotsTimer); };
   }, [token]);
 
   const handleLoginSuccess = (newToken: string, loggedUser: { name: string; username: string; role: string }) => {
@@ -229,8 +245,31 @@ export default function App() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center min-h-screen bg-slate-950 text-white font-body">
-        <p className="animate-pulse">Loading administration console...</p>
+      <div style={{ background: 'hsl(240 15% 9%)', minHeight: '100vh' }}
+        className="flex items-center justify-center font-body">
+        <div className="text-center space-y-5 px-8">
+          <div className="flex justify-center">
+            <div className="relative w-20 h-20">
+              <div className="absolute inset-0 rounded-3xl bg-gradient-to-tr from-teal-400 to-violet-600 animate-pulse opacity-30"></div>
+              <div className="w-20 h-20 rounded-3xl bg-gradient-to-tr from-teal-500 to-violet-600 flex items-center justify-center text-white font-extrabold text-3xl">
+                V
+              </div>
+            </div>
+          </div>
+          <div>
+            <h1 className="text-2xl font-extrabold text-white font-hero">VardanAI</h1>
+            <p className="text-white/40 text-xs mt-1">Hospital Management Console</p>
+          </div>
+          <div className="flex justify-center">
+            <Loader2 size={24} className="text-teal-400 animate-spin" />
+          </div>
+          <p className="text-white/50 text-sm">
+            {wakeMsg}{'.'.repeat(dots)}
+          </p>
+          <p className="text-white/20 text-xs max-w-xs mx-auto leading-relaxed">
+            Render free tier sleeps after 15 min inactivity.<br/>First load takes ~30 sec.
+          </p>
+        </div>
       </div>
     );
   }
