@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { UserPlus, Edit2, Trash2, Calendar, Phone, Stethoscope, IndianRupee } from 'lucide-react';
+import { UserPlus, Edit2, Trash2, Calendar, Phone, Stethoscope, IndianRupee, Upload, X, Loader2 } from 'lucide-react';
 
 interface Doctor {
   id: number;
@@ -40,6 +40,71 @@ export default function Doctors({ userRole }: DoctorsProps) {
     Friday: ['09:00-13:00', '15:00-18:00'],
     Saturday: ['09:00-13:00', '15:00-18:00']
   });
+
+  // Drag and Drop Upload States & Handlers
+  const [isDragging, setIsDragging] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState('');
+
+  const handleFileUpload = async (file: File) => {
+    if (!file.type.startsWith('image/')) {
+      setUploadError('Please upload an image file (PNG, JPG, JPEG)');
+      return;
+    }
+    setUploading(true);
+    setUploadError('');
+    
+    const reader = new FileReader();
+    reader.readAsDataURL(file);
+    reader.onload = async () => {
+      try {
+        const res = await fetch('/api/upload', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${localStorage.getItem('token')}`
+          },
+          body: JSON.stringify({
+            filename: file.name,
+            base64Data: reader.result
+          })
+        });
+        const data = await res.json();
+        if (res.ok && data.url) {
+          setPhotoUrl(data.url);
+        } else {
+          setUploadError(data.error || 'Failed to upload image');
+        }
+      } catch (err) {
+        console.error('Upload request failed:', err);
+        setUploadError('Failed to upload image. Please try again.');
+      } finally {
+        setUploading(false);
+      }
+    };
+    reader.onerror = () => {
+      setUploadError('Failed to read file.');
+      setUploading(false);
+    };
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(true);
+  };
+
+  const handleDragLeave = () => {
+    setIsDragging(false);
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+    const file = e.dataTransfer.files[0];
+    if (file) {
+      handleFileUpload(file);
+    }
+  };
 
   const fetchDoctors = async () => {
     try {
@@ -344,14 +409,88 @@ export default function Doctors({ userRole }: DoctorsProps) {
               </div>
 
               <div>
-                <label className="block text-sm font-semibold text-text-muted mb-1.5">Photo URL</label>
-                <input
-                  type="text"
-                  value={photoUrl}
-                  onChange={(e) => setPhotoUrl(e.target.value)}
-                  className="w-full px-4 py-2.5 bg-card-bg border border-card-border rounded-xl text-text-main focus:outline-none focus:ring-2 focus:ring-accent-color/50"
-                  placeholder="https://images.unsplash.com/... or relative path"
-                />
+                <label className="block text-sm font-semibold text-text-muted mb-1.5">Doctor's Photo</label>
+                
+                {/* Drag and Drop Zone */}
+                <div
+                  onDragOver={handleDragOver}
+                  onDragLeave={handleDragLeave}
+                  onDrop={handleDrop}
+                  onClick={() => document.getElementById('doctor-photo-upload')?.click()}
+                  className={`w-full p-6 border-2 border-dashed rounded-2xl flex flex-col items-center justify-center gap-3 cursor-pointer transition-all ${
+                    isDragging
+                      ? 'border-accent-color bg-accent-color/10'
+                      : 'border-card-border/50 bg-card-bg/20 hover:bg-card-bg/40'
+                  }`}
+                >
+                  <input
+                    type="file"
+                    id="doctor-photo-upload"
+                    accept="image/*"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (file) handleFileUpload(file);
+                    }}
+                    className="hidden"
+                  />
+
+                  {uploading ? (
+                    <div className="flex flex-col items-center gap-2 py-4">
+                      <Loader2 className="animate-spin text-accent-color" size={32} />
+                      <span className="text-sm font-semibold text-text-main">Uploading image...</span>
+                    </div>
+                  ) : photoUrl ? (
+                    <div className="flex flex-col items-center gap-3 w-full relative">
+                      <div className="relative group">
+                        <img
+                          src={photoUrl}
+                          alt="Preview"
+                          className="w-24 h-24 rounded-full object-cover border-2 border-accent-color/50 shadow-md"
+                          onError={(e) => {
+                            (e.target as HTMLElement).style.display = 'none';
+                          }}
+                        />
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setPhotoUrl('');
+                          }}
+                          className="absolute -top-1 -right-1 p-1 bg-red-500 hover:bg-red-600 text-white rounded-full transition-all shadow-md active:scale-90"
+                        >
+                          <X size={12} />
+                        </button>
+                      </div>
+                      <span className="text-xs text-text-muted break-all text-center px-4 bg-black/20 py-1 rounded-md border border-card-border/30">
+                        {photoUrl}
+                      </span>
+                    </div>
+                  ) : (
+                    <div className="flex flex-col items-center gap-2 text-center py-2">
+                      <div className="p-3 bg-accent-color/10 rounded-full text-accent-color">
+                        <Upload size={24} />
+                      </div>
+                      <p className="text-sm font-bold text-text-main">Drag & drop doctor photo here</p>
+                      <p className="text-xs text-text-muted">or click to browse from files (JPG, PNG)</p>
+                    </div>
+                  )}
+
+                  {uploadError && (
+                    <p className="text-xs text-red-400 font-semibold text-center">{uploadError}</p>
+                  )}
+                </div>
+
+                {/* Direct text URL input fallback */}
+                <div className="mt-2.5">
+                  <span className="text-xs text-text-muted font-semibold block mb-1">Or paste direct photo URL:</span>
+                  <input
+                    type="text"
+                    value={photoUrl}
+                    onChange={(e) => setPhotoUrl(e.target.value)}
+                    className="w-full px-4 py-2 bg-card-bg border border-card-border rounded-xl text-text-main focus:outline-none focus:ring-2 focus:ring-accent-color/50 text-xs"
+                    placeholder="https://images.unsplash.com/... or /uploads/..."
+                  />
+                </div>
               </div>
 
               <div>

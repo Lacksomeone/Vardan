@@ -1,6 +1,8 @@
 import express from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
+import fs from 'fs';
+import path from 'path';
 import db from '../db.js';
 import { connectionStatus, qrCodeStr, pairingCode, lastError, restartWhatsApp, sendTextMessage } from '../whatsapp.js';
 import { LLMGateway } from '../llm.js';
@@ -10,6 +12,40 @@ import { clearRegSession } from '../router.js';
 
 const router = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'vardan_secret_key_super_secure_9876';
+
+// ─── Image Upload Endpoint (Base64) ──────────────────────────────────────────
+router.post('/upload', (req: any, res, next) => {
+  // Call authMiddleware internally to protect the route
+  authMiddleware(req, res, next);
+}, (req: any, res) => {
+  const { filename, base64Data } = req.body;
+  if (!filename || !base64Data) {
+    return res.status(400).json({ error: 'Filename and base64Data are required' });
+  }
+
+  try {
+    const uploadsDir = path.resolve('uploads');
+    if (!fs.existsSync(uploadsDir)) {
+      fs.mkdirSync(uploadsDir, { recursive: true });
+    }
+
+    const base64Content = base64Data.replace(/^data:image\/\w+;base64,/, "");
+    const buffer = Buffer.from(base64Content, 'base64');
+
+    const ext = path.extname(filename) || '.jpg';
+    const baseName = path.basename(filename, ext).replace(/[^a-zA-Z0-9]/g, '_');
+    const uniqueFilename = `${baseName}_${Date.now()}${ext}`;
+    const filePath = path.join(uploadsDir, uniqueFilename);
+
+    fs.writeFileSync(filePath, buffer);
+
+    const fileUrl = `/uploads/${uniqueFilename}`;
+    return res.json({ url: fileUrl });
+  } catch (err: any) {
+    console.error('File upload failed:', err);
+    return res.status(500).json({ error: 'Failed to upload file: ' + err.message });
+  }
+});
 
 // Middleware: Authenticate Admin JWT
 export function authMiddleware(req: any, res: any, next: any) {
