@@ -364,3 +364,36 @@ router.get('/monitor/stats', authMiddleware, (req, res) => {
 });
 
 export default router;
+
+// ─── Follow-Up Jobs API ───────────────────────────────────────────────────────
+
+// GET all follow-up jobs with patient + doctor info
+router.get('/followups', authMiddleware, (req, res) => {
+  const jobs = db.prepare(`
+    SELECT f.id, f.patient_id, f.trigger_date, f.status, f.created_at,
+           p.name as patient_name, p.phone as patient_phone,
+           d.name as doctor_name
+    FROM follow_up_jobs f
+    JOIN patients p ON f.patient_id = p.id
+    JOIN doctors d ON f.doctor_id = d.id
+    ORDER BY f.trigger_date DESC
+  `).all();
+  return res.json(jobs);
+});
+
+// POST create a new follow-up job manually
+router.post('/followups', authMiddleware, (req: any, res) => {
+  const { patientId, doctorId, triggerDate } = req.body;
+  if (!patientId || !doctorId || !triggerDate) {
+    return res.status(400).json({ error: 'patientId, doctorId, triggerDate required' });
+  }
+  try {
+    const result = db.prepare(`
+      INSERT INTO follow_up_jobs (patient_id, doctor_id, trigger_date, message_template, status)
+      VALUES (?, ?, ?, 'medicine_reminder', 'pending')
+    `).run(patientId, doctorId, triggerDate);
+    return res.json({ id: result.lastInsertRowid, message: 'Follow-up scheduled' });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});

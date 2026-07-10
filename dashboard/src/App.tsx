@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Link, Navigate, useLocation } from 'react-router-dom';
-import { LayoutDashboard, Users, Calendar, HelpCircle, Smartphone, LogOut, Sun, Moon, Plus, Wifi, Loader2, RefreshCcw } from 'lucide-react';
+import { LayoutDashboard, Users, Calendar, HelpCircle, Smartphone, LogOut, Sun, Moon, Plus, Wifi, Loader2, RefreshCcw, Bell } from 'lucide-react';
 
 // Import Pages
 import Login from './pages/Login';
@@ -11,6 +11,7 @@ import Patients from './pages/Patients';
 import KB from './pages/KB';
 import Monitoring from './pages/Monitoring';
 import WhatsAppConnect from './pages/WhatsAppConnect';
+import FollowUps from './pages/FollowUps';
 
 function DashboardLayout({ user, onLogout }: { user: any; onLogout: () => void }) {
   // index.html starts with class="dark" — toggle switches to light class
@@ -33,6 +34,7 @@ function DashboardLayout({ user, onLogout }: { user: any; onLogout: () => void }
     { label: 'WhatsApp', path: '/whatsapp', icon: Wifi, highlight: true },
     { label: 'Analytics', path: '/', icon: LayoutDashboard },
     { label: 'Appointments', path: '/appointments', icon: Calendar },
+    { label: 'Follow-Ups', path: '/followups', icon: Bell },
     { label: 'Patients', path: '/patients', icon: Users },
     { label: 'Doctors', path: '/doctors', icon: Users },
     { label: 'Knowledge Base', path: '/kb', icon: HelpCircle },
@@ -135,6 +137,7 @@ function DashboardLayout({ user, onLogout }: { user: any; onLogout: () => void }
             <Route path="/" element={<Analytics />} />
             <Route path="/doctors" element={<Doctors userRole={user.role} />} />
             <Route path="/appointments" element={<Appointments />} />
+            <Route path="/followups" element={<FollowUps />} />
             <Route path="/patients" element={<Patients />} />
             <Route path="/kb" element={<KB />} />
             <Route path="/monitor" element={<Monitoring />} />

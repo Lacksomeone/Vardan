@@ -353,6 +353,21 @@ export async function handleBookingQuery(patientId: string, text: string, lang: 
           const patient = db.prepare('SELECT name, phone FROM patients WHERE id = ?').get(patientId) as any;
           const doctor = db.prepare('SELECT name, department FROM doctors WHERE id = ?').get(session.doctorId!) as any;
           
+          // Auto-schedule follow-up reminder 9 days after appointment (for 10-day medicine course)
+          const apptDate = new Date(session.date!);
+          apptDate.setDate(apptDate.getDate() + 9);
+          const followUpDate = apptDate.toISOString().split('T')[0];
+          
+          try {
+            db.prepare(`
+              INSERT INTO follow_up_jobs (patient_id, doctor_id, trigger_date, message_template, status)
+              VALUES (?, ?, ?, 'medicine_reminder', 'pending')
+            `).run(patientId, session.doctorId, followUpDate);
+            console.log(`[FollowUp] Auto-scheduled reminder for ${patient.name} on ${followUpDate}`);
+          } catch (err) {
+            console.error('[FollowUp] Failed to schedule:', err);
+          }
+
           // Sync to Google Spreadsheet in background
           syncAppointmentToGoogleSheet({
             patientName: patient.name,
