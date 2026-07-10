@@ -344,20 +344,73 @@ export async function handleBookingQuery(patientId: string, text: string, lang: 
     }
 
     session.timeSlot = matchedSlot;
-    session.stage = 'confirm';
 
-    const doctor = db.prepare('SELECT name FROM doctors WHERE id = ?').get(session.doctorId!) as any;
+    // ✅ AUTO-BOOK: Skip confirmation, book immediately with race-condition check
+    const doctorForBook = db.prepare('SELECT name, department FROM doctors WHERE id = ?').get(session.doctorId!) as any;
+    try {
+      db.transaction(() => {
+        const currentSlots = getAvailableSlots(session.doctorId!, session.date!);
+        if (!currentSlots.includes(session.timeSlot!)) {
+          throw new Error('SLOT_TAKEN');
+        }
+        db.prepare(`
+          INSERT INTO appointments (patient_id, doctor_id, date, time_slot, status)
+          VALUES (?, ?, ?, ?, 'confirmed')
+        `).run(patientId, session.doctorId, session.date, session.timeSlot);
+      })();
 
-    const confirmPrompt = {
-      hi: `कृपया पुष्टि करें: क्या मैं Dr. ${doctor.name} के साथ तारीख ${session.date} को समय ${session.timeSlot} बजे का अपॉइंटमेंट बुक कर दूँ? (कृपया "हाँ" या "नहीं" लिखकर भेजें)`,
-      hinglish: `Kripya confirm karein: Kya main Dr. ${doctor.name} ke sath date ${session.date} ko time ${session.timeSlot} ka appointment book kar du? (Haan / Nahi)`,
-      en: `Please confirm: Should I book your appointment with Dr. ${doctor.name} on ${session.date} at ${session.timeSlot}? (Yes / No)`
-    };
-    await sendTextMessage(patientId, confirmPrompt[lang]);
+      const patientForBook = db.prepare('SELECT name, phone FROM patients WHERE id = ?').get(patientId) as any;
+
+      // Auto-schedule follow-up reminder 9 days after appointment
+      const apptDateObj = new Date(session.date!);
+      apptDateObj.setDate(apptDateObj.getDate() + 9);
+      const followUpDateStr = apptDateObj.toISOString().split('T')[0];
+      try {
+        db.prepare(`
+          INSERT INTO follow_up_jobs (patient_id, doctor_id, trigger_date, message_template, status)
+          VALUES (?, ?, ?, 'medicine_reminder', 'pending')
+        `).run(patientId, session.doctorId, followUpDateStr);
+        console.log(`[FollowUp] Auto-scheduled for ${patientForBook.name} on ${followUpDateStr}`);
+      } catch (fuErr) {
+        console.error('[FollowUp] Failed to schedule:', fuErr);
+      }
+
+      // Sync to Google Sheets
+      syncAppointmentToGoogleSheet({
+        patientName: patientForBook.name,
+        patientPhone: patientForBook.phone,
+        doctorName: doctorForBook.name,
+        date: session.date!,
+        timeSlot: session.timeSlot!,
+        status: 'confirmed'
+      }).catch(err => console.error('Failed to sync appointment to Google Sheets:', err));
+
+      const autoBookedMsg = {
+        hi: `✅ आपका अपॉइंटमेंट Dr. ${doctorForBook.name} (${doctorForBook.department}) के साथ ${session.date} को ${session.timeSlot} बजे बुक हो गया है! कृपया समय पर अस्पताल पहुंचें।`,
+        hinglish: `✅ Aapka appointment Dr. ${doctorForBook.name} (${doctorForBook.department}) ke sath ${session.date} ko ${session.timeSlot} par book ho gaya hai! Kripya time par hospital pahuchein.`,
+        en: `✅ Your appointment with Dr. ${doctorForBook.name} (${doctorForBook.department}) on ${session.date} at ${session.timeSlot} has been booked! Please arrive on time.`
+      };
+      await sendTextMessage(patientId, autoBookedMsg[lang]);
+    } catch (err: any) {
+      if (err.message === 'SLOT_TAKEN') {
+        const takenMsg = {
+          hi: `क्षमा करें, ${session.timeSlot} का स्लॉट अभी भर गया है। कृपया कोई और समय चुनें:\n\n${getAvailableSlots(session.doctorId!, session.date!).join('\n')}`,
+          hinglish: `Sorry, ${session.timeSlot} slot abhi kisi aur ne book kar liya. Koi aur slot chunein:\n\n${getAvailableSlots(session.doctorId!, session.date!).join('\n')}`,
+          en: `Sorry, the ${session.timeSlot} slot was just taken. Please pick another:\n\n${getAvailableSlots(session.doctorId!, session.date!).join('\n')}`
+        };
+        session.stage = 'slot'; // Stay on slot selection
+        await sendTextMessage(patientId, takenMsg[lang]);
+        return;
+      } else {
+        console.error('Auto-booking transaction failed:', err);
+        await sendTextMessage(patientId, 'Booking error occurred. Please try again.');
+      }
+    }
+    delete bookingSessions[patientId];
     return;
   }
 
-  // 5. Process stage: confirm
+  // 5. Process stage: confirm (only for cancel / reschedule — book is auto-handled at slot selection)
   if (session.stage === 'confirm') {
     const answer = text.toLowerCase().trim();
     const isYes = answer === 'yes' || answer === 'y' || answer === 'ha' || answer === 'haan' || answer === 'ok' || answer === 'yes' || isHindiYes(answer);
