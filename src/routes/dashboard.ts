@@ -58,17 +58,17 @@ router.get('/doctors', authMiddleware, (req, res) => {
 router.post('/doctors', authMiddleware, (req: any, res) => {
   if (req.user.role !== 'owner') return res.status(403).json({ error: 'Only Owner can add doctors' });
 
-  const { name, department, phone, weekly_schedule_json, fee } = req.body;
+  const { name, department, phone, weekly_schedule_json, fee, details, photo_url, services } = req.body;
   if (!name || !department || !phone || !weekly_schedule_json || !fee) {
     return res.status(400).json({ error: 'All fields are required' });
   }
 
   try {
     const info = db.prepare(`
-      INSERT INTO doctors (name, department, phone, weekly_schedule_json, fee)
-      VALUES (?, ?, ?, ?, ?)
-    `).run(name, department, phone, weekly_schedule_json, fee);
-    return res.status(201).json({ id: info.lastInsertRowid, name, department, phone, fee });
+      INSERT INTO doctors (name, department, phone, weekly_schedule_json, fee, details, photo_url, services)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(name, department, phone, weekly_schedule_json, fee, details || null, photo_url || null, services || null);
+    return res.status(201).json({ id: info.lastInsertRowid, name, department, phone, fee, details, photo_url, services });
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
   }
@@ -78,19 +78,20 @@ router.put('/doctors/:id', authMiddleware, (req: any, res) => {
   if (req.user.role !== 'owner') return res.status(403).json({ error: 'Only Owner can modify doctors' });
 
   const { id } = req.params;
-  const { name, department, phone, weekly_schedule_json, fee, active } = req.body;
+  const { name, department, phone, weekly_schedule_json, fee, details, photo_url, services, active } = req.body;
 
   try {
     db.prepare(`
       UPDATE doctors 
-      SET name = ?, department = ?, phone = ?, weekly_schedule_json = ?, fee = ?, active = ?
+      SET name = ?, department = ?, phone = ?, weekly_schedule_json = ?, fee = ?, details = ?, photo_url = ?, services = ?, active = ?
       WHERE id = ?
-    `).run(name, department, phone, weekly_schedule_json, fee, active, id);
+    `).run(name, department, phone, weekly_schedule_json, fee, details || null, photo_url || null, services || null, active, id);
     return res.json({ message: 'Doctor details updated successfully' });
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
   }
 });
+
 
 router.delete('/doctors/:id', authMiddleware, (req: any, res) => {
   if (req.user.role !== 'owner') return res.status(403).json({ error: 'Only Owner can remove doctors' });

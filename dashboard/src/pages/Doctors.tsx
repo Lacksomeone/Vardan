@@ -8,6 +8,9 @@ interface Doctor {
   phone: string;
   weekly_schedule_json: string;
   fee: number;
+  details?: string;
+  photo_url?: string;
+  services?: string;
   active: number;
 }
 
@@ -26,6 +29,9 @@ export default function Doctors({ userRole }: DoctorsProps) {
   const [department, setDepartment] = useState('General Medicine');
   const [phone, setPhone] = useState('');
   const [fee, setFee] = useState(300);
+  const [details, setDetails] = useState('');
+  const [photoUrl, setPhotoUrl] = useState('');
+  const [services, setServices] = useState('');
   const [schedule, setSchedule] = useState<Record<string, string[]>>({
     Monday: ['09:00-13:00', '15:00-18:00'],
     Tuesday: ['09:00-13:00', '15:00-18:00'],
@@ -59,6 +65,9 @@ export default function Doctors({ userRole }: DoctorsProps) {
     setDepartment('General Medicine');
     setPhone('');
     setFee(300);
+    setDetails('');
+    setPhotoUrl('');
+    setServices('');
     setSchedule({
       Monday: ['09:00-13:00', '15:00-18:00'],
       Tuesday: ['09:00-13:00', '15:00-18:00'],
@@ -76,6 +85,9 @@ export default function Doctors({ userRole }: DoctorsProps) {
     setDepartment(doc.department);
     setPhone(doc.phone);
     setFee(doc.fee);
+    setDetails(doc.details || '');
+    setPhotoUrl(doc.photo_url || '');
+    setServices(doc.services || '');
     setSchedule(JSON.parse(doc.weekly_schedule_json));
     setShowModal(true);
   };
@@ -104,8 +116,12 @@ export default function Doctors({ userRole }: DoctorsProps) {
       phone,
       fee,
       weekly_schedule_json: JSON.stringify(schedule),
+      details,
+      photo_url: photoUrl,
+      services,
       active: editingDoc ? editingDoc.active : 1
     };
+
 
     try {
       const res = await fetch(url, {
@@ -174,9 +190,17 @@ export default function Doctors({ userRole }: DoctorsProps) {
               <div className="absolute -right-8 -top-8 w-24 h-24 rounded-full bg-accent-color/10 blur-xl"></div>
               
               <div className="flex items-start gap-4 mb-4">
-                <div className="p-3 bg-accent-color/10 rounded-2xl text-accent-color">
-                  <Stethoscope size={24} />
-                </div>
+                {doc.photo_url ? (
+                  <img
+                    src={doc.photo_url}
+                    alt={doc.name}
+                    className="w-16 h-16 rounded-2xl object-cover border border-card-border shadow-sm flex-shrink-0"
+                  />
+                ) : (
+                  <div className="p-3 bg-accent-color/10 rounded-2xl text-accent-color w-16 h-16 flex items-center justify-center flex-shrink-0">
+                    <Stethoscope size={24} />
+                  </div>
+                )}
                 <div>
                   <h2 className="text-xl font-bold font-hero text-text-main">{doc.name}</h2>
                   <span className="inline-block px-2.5 py-1 bg-violet-500/10 text-violet-400 font-body text-xs rounded-full mt-1">
@@ -190,15 +214,38 @@ export default function Doctors({ userRole }: DoctorsProps) {
                 </div>
               </div>
 
-              <div className="space-y-3 font-body text-sm text-text-muted mt-auto mb-6">
+              {doc.details && (
+                <p className="text-xs font-body text-text-muted mb-4 leading-relaxed line-clamp-3">
+                  {doc.details}
+                </p>
+              )}
+
+              {doc.services && (
+                <div className="mb-4 font-body">
+                  <div className="text-xs font-semibold text-text-main mb-1.5">Services Offered:</div>
+                  <div className="flex flex-wrap gap-1">
+                    {doc.services.split(',').map((svc: string) => (
+                      <span
+                        key={svc}
+                        className="px-2.5 py-0.5 bg-teal-500/10 text-teal-400 text-[10px] font-bold rounded-md border border-teal-500/20"
+                      >
+                        {svc.trim()}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div className="space-y-3 font-body text-sm text-text-muted mb-6">
                 <div className="flex items-center gap-2">
-                  <Phone size={16} />
+                  <Phone size={16} className="text-accent-color" />
                   <span>{doc.phone}</span>
                 </div>
                 <div className="flex items-center gap-2">
-                  <IndianRupee size={16} />
+                  <IndianRupee size={16} className="text-accent-color" />
                   <span>Consultation Fee: <span className="text-text-main font-bold">₹{doc.fee}</span></span>
                 </div>
+
                 <div className="border-t border-card-border/50 pt-3">
                   <div className="flex items-center gap-2 font-semibold text-text-main mb-1.5">
                     <Calendar size={16} />
@@ -295,6 +342,39 @@ export default function Doctors({ userRole }: DoctorsProps) {
                   required
                 />
               </div>
+
+              <div>
+                <label className="block text-sm font-semibold text-text-muted mb-1.5">Photo URL</label>
+                <input
+                  type="text"
+                  value={photoUrl}
+                  onChange={(e) => setPhotoUrl(e.target.value)}
+                  className="w-full px-4 py-2.5 bg-card-bg border border-card-border rounded-xl text-text-main focus:outline-none focus:ring-2 focus:ring-accent-color/50"
+                  placeholder="https://images.unsplash.com/... or relative path"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-semibold text-text-muted mb-1.5">Services Offered (comma-separated)</label>
+                <input
+                  type="text"
+                  value={services}
+                  onChange={(e) => setServices(e.target.value)}
+                  className="w-full px-4 py-2.5 bg-card-bg border border-card-border rounded-xl text-text-main focus:outline-none focus:ring-2 focus:ring-accent-color/50"
+                  placeholder="ECG, Consultation, Echo, BP Control"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-semibold text-text-muted mb-1.5">Bio / Doctor Details</label>
+                <textarea
+                  value={details}
+                  onChange={(e) => setDetails(e.target.value)}
+                  className="w-full px-4 py-2.5 bg-card-bg border border-card-border rounded-xl text-text-main focus:outline-none focus:ring-2 focus:ring-accent-color/50 h-20 resize-none"
+                  placeholder="Experience, background, specializations..."
+                />
+              </div>
+
 
               {/* Schedule Editor */}
               <div className="space-y-3 border-t border-card-border/50 pt-4">

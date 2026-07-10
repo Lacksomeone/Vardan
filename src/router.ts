@@ -26,7 +26,6 @@ export function clearRegSession(patientId: string) {
   return false;
 }
 
-// Helper to check if a string contains Devanagari characters
 function isHindiScript(text: string): boolean {
   return /[\u0900-\u097F]/.test(text);
 }
@@ -39,6 +38,45 @@ function detectInitialLanguage(text: string): 'hi' | 'en' | 'hinglish' {
   const hinglishWords = ['hai', 'kab', 'kaha', 'ko', 'se', 'baje', 'dikhana', 'dawa', 'mera', 'umra', 'naam'];
   const hasHinglish = hinglishWords.some(w => lower.split(/\s+/).includes(w));
   return hasHinglish ? 'hinglish' : 'en';
+}
+
+
+function classifyHeuristically(text: string): 'booking' | 'faq' | 'followup' | 'small_talk' {
+  const lower = text.toLowerCase();
+  
+  // Booking keywords
+  if (
+    lower.includes('book') || lower.includes('appointment') || lower.includes('slot') || 
+    lower.includes('cancel') || lower.includes('reschedule') || lower.includes('doctor') ||
+    lower.includes('time') || lower.includes('date') || lower.includes('appoint') ||
+    lower.includes('radd') || lower.includes('badal') || lower.includes('milan') || 
+    lower.includes('dikhana') || lower.includes('fees') || lower.includes('rupay') || 
+    lower.includes('paisa')
+  ) {
+    return 'booking';
+  }
+  
+  // Followup keywords
+  if (
+    lower.includes('recovery') || lower.includes('feeling better') || lower.includes('improved') || 
+    lower.includes('worse') || lower.includes('pain') || lower.includes('side effect') ||
+    lower.includes('aaram') || lower.includes('dard') || lower.includes('theek') ||
+    lower.includes('better')
+  ) {
+    return 'followup';
+  }
+  
+  // FAQ keywords
+  if (
+    lower.includes('timing') || lower.includes('address') || lower.includes('insurance') || 
+    lower.includes('where') || lower.includes('pata') || lower.includes('location') || 
+    lower.includes('kab') || lower.includes('kaha') || lower.includes('emergency') || 
+    lower.includes('icu')
+  ) {
+    return 'faq';
+  }
+  
+  return 'small_talk';
 }
 
 export async function handleIncomingMessage(msg: proto.IWebMessageInfo) {
@@ -122,6 +160,9 @@ JSON Schema:
   "intent": "booking" | "faq" | "followup" | "small_talk"
 }`;
 
+  let classifiedIntent: 'booking' | 'faq' | 'followup' | 'small_talk' = 'small_talk';
+  let detectedLang = patient.preferred_language || 'en';
+
   try {
     const routingResultStr = await llmGateway.getChatCompletion('groq', {
       systemPrompt,
@@ -134,14 +175,34 @@ JSON Schema:
       intent: 'booking' | 'faq' | 'followup' | 'small_talk';
     };
 
-    // Update patient preferred language if it differs
-    if (result.language && result.language !== patient.preferred_language) {
-      db.prepare('UPDATE patients SET preferred_language = ? WHERE id = ?').run(result.language, patientId);
-      patient.preferred_language = result.language;
+    if (result.intent) {
+      classifiedIntent = result.intent;
+    } else {
+      classifiedIntent = classifyHeuristically(text);
     }
 
-    // Routing Logic
-    switch (result.intent) {
+    if (result.language) {
+      detectedLang = result.language;
+    }
+  } catch (err) {
+    console.error('LLM Intent classification failed, using heuristic classification:', err);
+    classifiedIntent = classifyHeuristically(text);
+    detectedLang = detectInitialLanguage(text);
+  }
+
+  // Update patient preferred language if it differs
+  if (detectedLang !== patient.preferred_language) {
+    try {
+      db.prepare('UPDATE patients SET preferred_language = ? WHERE id = ?').run(detectedLang, patientId);
+      patient.preferred_language = detectedLang;
+    } catch (e) {
+      console.error('Failed to update patient language:', e);
+    }
+  }
+
+  // Route to the selected agent with isolated try-catch
+  try {
+    switch (classifiedIntent) {
       case 'booking':
         await handleBookingQuery(patientId, text, patient.preferred_language);
         break;
@@ -156,12 +217,18 @@ JSON Schema:
         await handleSmallTalk(patientId, text, patient.preferred_language);
         break;
     }
-  } catch (err) {
-    console.error('Routing failed, defaulting to FAQ agent:', err);
-    // Fallback: Default to FAQ agent
-    await handleFaqQuery(patientId, text, patient.preferred_language);
+  } catch (agentErr) {
+    console.error(`Agent execution failed for intent "${classifiedIntent}":`, agentErr);
+    // Send a polite user-facing error message instead of cascading to FAQ fallback
+    const errorMsgs = {
+      hi: 'क्षमा करें, आपके अनुरोध को प्रोसेस करने में कुछ तकनीकी समस्या आई है। कृपया दोबारा प्रयास करें या सीधे अस्पताल रिसेप्शन से संपर्क करें।',
+      hinglish: 'Sorry, aapke request ko process karne me kuch technical error aayi hai. Kripya dobara try karein ya seedhe hospital reception se contact karein.',
+      en: 'Sorry, we encountered a technical issue while processing your request. Please try again or contact the hospital reception directly.'
+    };
+    await sendTextMessage(patientId, errorMsgs[patient.preferred_language as 'hi' | 'en' | 'hinglish'] || errorMsgs.en);
   }
 }
+
 
 // Registration state machine
 async function handleRegistration(patientId: string, phone: string, text: string) {

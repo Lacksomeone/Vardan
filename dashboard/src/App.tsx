@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Link, Navigate, useLocation } from 'react-router-dom';
-import { LayoutDashboard, Users, Calendar, HelpCircle, Smartphone, LogOut, Sun, Moon, Plus, Wifi, Loader2, RefreshCcw, Bell } from 'lucide-react';
+import { LayoutDashboard, Users, Calendar, HelpCircle, Smartphone, LogOut, Sun, Moon, Plus, Wifi, Loader2, Bell } from 'lucide-react';
+
 
 // Import Pages
 import Login from './pages/Login';

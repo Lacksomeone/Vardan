@@ -39,10 +39,26 @@ export function initDb() {
       phone TEXT NOT NULL,
       weekly_schedule_json TEXT NOT NULL,
       fee INTEGER NOT NULL,
+      details TEXT,
+      photo_url TEXT,
+      services TEXT,
       active INTEGER DEFAULT 1,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
+  `);
 
+  // Migrate existing databases to add columns if they do not exist
+  try {
+    db.exec('ALTER TABLE doctors ADD COLUMN details TEXT;');
+  } catch (e) {}
+  try {
+    db.exec('ALTER TABLE doctors ADD COLUMN photo_url TEXT;');
+  } catch (e) {}
+  try {
+    db.exec('ALTER TABLE doctors ADD COLUMN services TEXT;');
+  } catch (e) {}
+
+  db.exec(`
     CREATE TABLE IF NOT EXISTS appointments (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       patient_id TEXT NOT NULL,
@@ -163,7 +179,10 @@ export function initDb() {
           Thursday: ['10:00-14:00', '16:00-20:00'],
           Friday: ['10:00-14:00', '16:00-20:00'],
           Saturday: ['10:00-14:00', '16:00-20:00']
-        })
+        }),
+        details: 'Specialist Cardiologist with 10+ years experience in heart surgeries, cardiovascular health, and pacemaker implantation.',
+        photo_url: 'https://images.unsplash.com/photo-1612349317150-e413f6a5b16d?w=250&h=250&fit=crop',
+        services: 'ECG, Echo, Angiography, BP Management, Heart Checkup'
       },
       {
         name: 'Dr. Ankit Sharma',
@@ -177,7 +196,10 @@ export function initDb() {
           Thursday: ['09:00-13:00', '15:00-18:00'],
           Friday: ['09:00-13:00', '15:00-18:00'],
           Saturday: ['09:00-13:00', '15:00-18:00']
-        })
+        }),
+        details: 'General Physician with expertise in family medicine, treating viral fevers, chronic illnesses, diabetes, and general health consultation.',
+        photo_url: 'https://images.unsplash.com/photo-1622253692010-333f2da6031d?w=250&h=250&fit=crop',
+        services: 'General OPD, Diabetes Care, Hypertension Management, Vaccination'
       },
       {
         name: 'Dr. Om Shukla',
@@ -191,20 +213,49 @@ export function initDb() {
           Thursday: ['10:00-15:00'],
           Friday: ['10:00-15:00'],
           Saturday: ['10:00-15:00']
-        })
+        }),
+        details: 'Dedicated Pediatrician specializing in newborn care, childhood nutrition, child development, vaccinations, and pediatric illnesses.',
+        photo_url: 'https://images.unsplash.com/photo-1594824813573-246434de83fb?w=250&h=250&fit=crop',
+        services: 'Newborn Checkup, Child Vaccination, Growth Monitoring, Pediatric OPD'
       }
     ];
 
     const stmt = db.prepare(`
-      INSERT INTO doctors (name, department, phone, weekly_schedule_json, fee)
-      VALUES (?, ?, ?, ?, ?)
+      INSERT INTO doctors (name, department, phone, weekly_schedule_json, fee, details, photo_url, services)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     for (const doc of doctors) {
-      stmt.run(doc.name, doc.department, doc.phone, doc.weekly_schedule, doc.fee);
+      stmt.run(doc.name, doc.department, doc.phone, doc.weekly_schedule, doc.fee, doc.details, doc.photo_url, doc.services);
     }
     console.log('Seeded default doctors list');
+  } else {
+    // Populate details, photo_url, services if they are currently null in existing DB
+    try {
+      db.prepare(`UPDATE doctors SET details = ?, photo_url = ?, services = ? WHERE name = ? AND details IS NULL`).run(
+        'Specialist Cardiologist with 10+ years experience in heart surgeries, cardiovascular health, and pacemaker implantation.',
+        'https://images.unsplash.com/photo-1612349317150-e413f6a5b16d?w=250&h=250&fit=crop',
+        'ECG, Echo, Angiography, BP Management, Heart Checkup',
+        'Dr. Nitin Singh'
+      );
+      db.prepare(`UPDATE doctors SET details = ?, photo_url = ?, services = ? WHERE name = ? AND details IS NULL`).run(
+        'General Physician with expertise in family medicine, treating viral fevers, chronic illnesses, diabetes, and general health consultation.',
+        'https://images.unsplash.com/photo-1622253692010-333f2da6031d?w=250&h=250&fit=crop',
+        'General OPD, Diabetes Care, Hypertension Management, Vaccination',
+        'Dr. Ankit Sharma'
+      );
+      db.prepare(`UPDATE doctors SET details = ?, photo_url = ?, services = ? WHERE name = ? AND details IS NULL`).run(
+        'Dedicated Pediatrician specializing in newborn care, childhood nutrition, child development, vaccinations, and pediatric illnesses.',
+        'https://images.unsplash.com/photo-1594824813573-246434de83fb?w=250&h=250&fit=crop',
+        'Newborn Checkup, Child Vaccination, Growth Monitoring, Pediatric OPD',
+        'Dr. Om Shukla'
+      );
+      console.log('Updated existing doctors list with details, photo and services.');
+    } catch (e) {
+      console.error('Failed to update existing doctors columns:', e);
+    }
   }
+
 
   // Seed LLM Keys from Env to DB (both comma-separated and individual formats supported!)
   const providers = ['groq', 'gemini', 'openrouter'];

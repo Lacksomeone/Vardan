@@ -22,7 +22,8 @@ const statusStyle: Record<string, string> = {
   escalated: 'bg-red-500/15    border-red-500/30    text-red-400',
 };
 
-const statusIcon: Record<string, JSX.Element> = {
+const statusIcon: Record<string, any> = {
+
   pending:   <Clock size={12} />,
   sent:      <Send size={12} />,
   responded: <CheckCircle size={12} />,
