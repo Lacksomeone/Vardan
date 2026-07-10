@@ -7,14 +7,14 @@ const SPREADSHEET_ID = '1YH1C0cFZ-JAJrMV0lhkyHtC1I5aWYPVTHDRFTNNwbas';
 const CLIENT_EMAIL = process.env.GOOGLE_CLIENT_EMAIL;
 const PRIVATE_KEY = process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, '\n');
 
-// Initialize Google Sheets Auth client
+// Initialize Google Sheets Auth client (Service Account)
 let sheetsClient: any = null;
 
 function getSheetsClient() {
   if (sheetsClient) return sheetsClient;
 
   if (!CLIENT_EMAIL || !PRIVATE_KEY) {
-    console.warn('Google Sheets credentials not set in .env. Skipping spreadsheet sync.');
+    console.warn('Google Sheets API credentials not set in .env. Skipping Service Account fallback.');
     return null;
   }
 
@@ -33,7 +33,7 @@ function getSheetsClient() {
   }
 }
 
-// Ensure sheets exist with correct headers
+// Ensure sheets exist with correct headers (Service Account Method)
 async function ensureSheetExists(sheets: any, title: string, headers: string[]) {
   try {
     const meta = await sheets.spreadsheets.get({
@@ -45,7 +45,6 @@ async function ensureSheetExists(sheets: any, title: string, headers: string[]) 
     );
 
     if (!sheetExists) {
-      // Create new sheet
       await sheets.spreadsheets.batchUpdate({
         spreadsheetId: SPREADSHEET_ID,
         requestBody: {
@@ -60,7 +59,6 @@ async function ensureSheetExists(sheets: any, title: string, headers: string[]) 
       });
       console.log(`Created Google Sheet: "${title}"`);
 
-      // Write headers
       await sheets.spreadsheets.values.update({
         spreadsheetId: SPREADSHEET_ID,
         range: `${title}!A1`,
@@ -75,6 +73,29 @@ async function ensureSheetExists(sheets: any, title: string, headers: string[]) 
   }
 }
 
+// Helper: Sync using Google Apps Script Web App URL
+async function syncViaWebApp(sheetName: string, headers: string[], rowData: any[]): Promise<boolean> {
+  const url = process.env.SHEETS_WEBAPP_URL;
+  if (!url) return false;
+
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sheetName, headers, rowData })
+    });
+    
+    if (res.ok) {
+      console.log(`Successfully synced to sheet "${sheetName}" via Google Web App URL.`);
+      return true;
+    }
+    return false;
+  } catch (err) {
+    console.error(`Google Apps Script web app sync failed for "${sheetName}":`, err);
+    return false;
+  }
+}
+
 // Sync Patient Registration details
 export async function syncPatientToGoogleSheet(patient: {
   name: string;
@@ -83,13 +104,8 @@ export async function syncPatientToGoogleSheet(patient: {
   gender: string;
   lang: string;
 }) {
-  const sheets = getSheetsClient();
-  if (!sheets) return;
-
   const title = 'Patients';
   const headers = ['Name', 'Phone', 'Age', 'Gender', 'Preferred Language', 'Registered At'];
-  await ensureSheetExists(sheets, title, headers);
-
   const rowValues = [
     patient.name,
     patient.phone,
@@ -98,6 +114,21 @@ export async function syncPatientToGoogleSheet(patient: {
     patient.lang,
     new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })
   ];
+
+  // Method 1: Try Google Apps Script Web App URL (Simplest)
+  if (process.env.SHEETS_WEBAPP_URL) {
+    const success = await syncViaWebApp(title, headers, rowValues);
+    if (success) return;
+  }
+
+  // Method 2: Try Service Account Fallback
+  const sheets = getSheetsClient();
+  if (!sheets) {
+    console.warn('Google Sheets sync skipped: Neither SHEETS_WEBAPP_URL nor Service Account Key configured.');
+    return;
+  }
+
+  await ensureSheetExists(sheets, title, headers);
 
   try {
     await sheets.spreadsheets.values.append({
@@ -109,7 +140,7 @@ export async function syncPatientToGoogleSheet(patient: {
         values: [rowValues]
       }
     });
-    console.log(`Synced patient "${patient.name}" to Google Sheet.`);
+    console.log(`Synced patient "${patient.name}" to Google Sheet via Service Account.`);
   } catch (err) {
     console.error('Failed to sync patient row to Google Sheet:', err);
   }
@@ -124,13 +155,8 @@ export async function syncAppointmentToGoogleSheet(appointment: {
   timeSlot: string;
   status: string;
 }) {
-  const sheets = getSheetsClient();
-  if (!sheets) return;
-
   const title = 'Appointments';
   const headers = ['Patient Name', 'Patient Phone', 'Doctor Name', 'Date', 'Time Slot', 'Status', 'Booked At'];
-  await ensureSheetExists(sheets, title, headers);
-
   const rowValues = [
     appointment.patientName,
     appointment.patientPhone,
@@ -140,6 +166,18 @@ export async function syncAppointmentToGoogleSheet(appointment: {
     appointment.status,
     new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })
   ];
+
+  // Method 1: Try Google Apps Script Web App URL (Simplest)
+  if (process.env.SHEETS_WEBAPP_URL) {
+    const success = await syncViaWebApp(title, headers, rowValues);
+    if (success) return;
+  }
+
+  // Method 2: Try Service Account Fallback
+  const sheets = getSheetsClient();
+  if (!sheets) return;
+
+  await ensureSheetExists(sheets, title, headers);
 
   try {
     await sheets.spreadsheets.values.append({
@@ -151,7 +189,7 @@ export async function syncAppointmentToGoogleSheet(appointment: {
         values: [rowValues]
       }
     });
-    console.log(`Synced appointment for patient "${appointment.patientName}" with Dr. ${appointment.doctorName} to Google Sheet.`);
+    console.log(`Synced appointment for patient "${appointment.patientName}" with Dr. ${appointment.doctorName} to Google Sheet via Service Account.`);
   } catch (err) {
     console.error('Failed to sync appointment row to Google Sheet:', err);
   }
