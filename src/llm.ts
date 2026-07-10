@@ -29,31 +29,29 @@ export class LLMGateway {
     console.log(`Loaded ${this.keys.length} active LLM keys from database.`);
   }
 
-  // Pick the best key for a given provider
-  private pickKey(provider: 'groq' | 'gemini' | 'openrouter'): LLMKeyRecord | null {
+  // Pick a batch of N available keys, sorted by usage (least used first)
+  private pickKeysBatch(count: number): LLMKeyRecord[] {
     const now = Date.now();
     const availableKeys = this.keys.filter(
-      (k) => k.provider === provider && k.cooldown_until < now && k.active === 1
+      (k) => k.cooldown_until < now && k.active === 1
     );
 
     if (availableKeys.length === 0) {
-      return null;
+      return [];
     }
 
-    // Sort by usage count ascending to get least recently used key
+    // Sort by usage count ascending to get least recently used keys
     availableKeys.sort((a, b) => a.usage_count - b.usage_count);
-    return availableKeys[0];
+    return availableKeys.slice(0, count);
   }
 
   // Put a key on cooldown in memory and SQLite DB
   private setCooldown(keyId: number, durationMs: number = 60000): void {
     const cooldownTime = Date.now() + durationMs;
-    // Update in-memory
     const key = this.keys.find((k) => k.id === keyId);
     if (key) {
       key.cooldown_until = cooldownTime;
     }
-    // Update DB
     db.prepare('UPDATE llm_keys SET cooldown_until = ? WHERE id = ?').run(cooldownTime, keyId);
   }
 
@@ -74,62 +72,116 @@ export class LLMGateway {
     `).run(provider, keyIndex, latencyMs, success ? 1 : 0, error || null);
   }
 
-  // Primary method to get chat completion
+  // Primary method: Race multiple keys/providers in parallel to respond in under 1 second
   public async getChatCompletion(
     preferredProvider: 'groq' | 'gemini' | 'openrouter',
     params: LLMCallParams
   ): Promise<string> {
-    const providersPriority: ('groq' | 'gemini' | 'openrouter')[] = [
-      preferredProvider,
-      preferredProvider === 'groq' ? 'gemini' : 'groq',
-      'openrouter'
-    ];
-
-    // Remove duplicates
-    const finalPriority = Array.from(new Set(providersPriority));
-
-    for (const provider of finalPriority) {
-      const attempts = 3;
-      for (let attempt = 0; attempt < attempts; attempt++) {
-        const keyRecord = this.pickKey(provider);
-        if (!keyRecord) {
-          console.warn(`No keys available for provider: ${provider}, checking next provider.`);
-          break; // Break out of attempts, try next provider
-        }
-
-        const start = Date.now();
-        try {
-          const response = await this.executeCall(provider, keyRecord.key_val, params);
-          const latency = Date.now() - start;
-
-          this.incrementUsage(keyRecord.id);
-          this.logCall(provider, keyRecord.id, latency, true);
-          return response;
-        } catch (err: any) {
-          const latency = Date.now() - start;
-          const errorMsg = err.message || String(err);
-          console.error(`LLM Call Failed (Provider: ${provider}, KeyID: ${keyRecord.id}): ${errorMsg}`);
-          
-          this.setCooldown(keyRecord.id, 60000); // 1 minute cooldown on failure
-          this.logCall(provider, keyRecord.id, latency, false, errorMsg);
-
-          // If this was a timeout or rate limit, rotate immediately
-          continue;
-        }
-      }
+    this.reloadKeys(); // Refresh latest cooldowns
+    
+    // Pick the top 3 available keys to race
+    const keysBatch = this.pickKeysBatch(3);
+    
+    if (keysBatch.length === 0) {
+      throw new Error('All LLM keys are currently in cooldown.');
     }
 
-    throw new Error('All LLM providers and keys failed or are currently in cooldown.');
+    if (keysBatch.length === 1) {
+      return this.runSingleKeyWithRetry(keysBatch[0], params);
+    }
+
+    const controllers = keysBatch.map(() => new AbortController());
+    
+    const promises = keysBatch.map(async (keyRecord, index) => {
+      const controller = controllers[index];
+      const start = Date.now();
+      try {
+        const response = await this.executeCallWithController(
+          keyRecord.provider,
+          keyRecord.key_val,
+          params,
+          controller
+        );
+        const latency = Date.now() - start;
+
+        // Success: log usage & latency
+        this.incrementUsage(keyRecord.id);
+        this.logCall(keyRecord.provider, keyRecord.id, latency, true);
+        
+        // Abort all other active requests in the race
+        controllers.forEach((c, idx) => {
+          if (idx !== index) c.abort();
+        });
+
+        return response;
+      } catch (err: any) {
+        // If it was aborted by another winner, ignore
+        if (err.name === 'AbortError' || err.message?.includes('aborted')) {
+          throw err;
+        }
+
+        const latency = Date.now() - start;
+        const errorMsg = err.message || String(err);
+        
+        // Key failed (rate limit/timeout) -> Cooldown key
+        this.setCooldown(keyRecord.id, 60000);
+        this.logCall(keyRecord.provider, keyRecord.id, latency, false, errorMsg);
+        throw err;
+      }
+    });
+
+    try {
+      // Promise.any resolves as soon as the first successful response is returned
+      const result = await Promise.any(promises);
+      return result;
+    } catch (err) {
+      console.warn('All keys in the parallel batch failed. Retrying with backup key...');
+      
+      // Fallback: Pick next available key sequentially
+      this.reloadKeys();
+      const fallbackKeys = this.pickKeysBatch(1);
+      if (fallbackKeys.length > 0) {
+        return this.runSingleKeyWithRetry(fallbackKeys[0], params);
+      }
+      throw new Error('All primary and backup LLM keys failed or are cooling down.');
+    }
   }
 
-  // Execute the REST fetch API call with timeout
-  private async executeCall(
-    provider: 'groq' | 'gemini' | 'openrouter',
-    apiKey: string,
+  // Run a single key with standard retry fallback
+  private async runSingleKeyWithRetry(
+    keyRecord: LLMKeyRecord,
     params: LLMCallParams
   ): Promise<string> {
+    const start = Date.now();
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 8000); // 8 seconds hard timeout
+    try {
+      const response = await this.executeCallWithController(
+        keyRecord.provider,
+        keyRecord.key_val,
+        params,
+        controller
+      );
+      const latency = Date.now() - start;
+      this.incrementUsage(keyRecord.id);
+      this.logCall(keyRecord.provider, keyRecord.id, latency, true);
+      return response;
+    } catch (err: any) {
+      const latency = Date.now() - start;
+      const errorMsg = err.message || String(err);
+      this.setCooldown(keyRecord.id, 60000);
+      this.logCall(keyRecord.provider, keyRecord.id, latency, false, errorMsg);
+      throw err;
+    }
+  }
+
+  // Execute the REST API call with abort signal
+  private async executeCallWithController(
+    provider: 'groq' | 'gemini' | 'openrouter',
+    apiKey: string,
+    params: LLMCallParams,
+    controller: AbortController
+  ): Promise<string> {
+    const timeoutId = setTimeout(() => controller.abort(), 8000);
 
     try {
       if (provider === 'groq') {
@@ -230,7 +282,7 @@ export class LLMGateway {
     } catch (error: any) {
       clearTimeout(timeoutId);
       if (error.name === 'AbortError') {
-        throw new Error('LLM call timed out after 8 seconds');
+        throw new Error('LLM call was aborted');
       }
       throw error;
     }
