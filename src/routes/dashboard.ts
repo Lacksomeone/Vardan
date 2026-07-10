@@ -2,7 +2,7 @@ import express from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import db from '../db.js';
-import { sock, connectionStatus, qrCodeStr } from '../whatsapp.js';
+import { sock, connectionStatus, qrCodeStr, lastError, restartWhatsApp } from '../whatsapp.js';
 import { LLMGateway } from '../llm.js';
 import { syncAppointmentToGoogleSheet } from '../sheets.js';
 
@@ -310,11 +310,22 @@ router.get('/monitor/status', authMiddleware, (req, res) => {
     whatsapp: {
       status: connectionStatus,
       qrAvailable: !!qrCodeStr,
-      qrString: qrCodeStr
+      qrString: qrCodeStr,
+      lastError: lastError
     },
     keys: formattedKeys,
     telemetry: logs
   });
+});
+
+// WhatsApp: Force restart / fresh QR
+router.post('/whatsapp/restart', authMiddleware, async (req, res) => {
+  try {
+    restartWhatsApp().catch(err => console.error('[Restart]', err));
+    return res.json({ message: 'WhatsApp restart initiated. New QR will appear in ~10 seconds.' });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
 });
 
 // 8. Analytics Stats

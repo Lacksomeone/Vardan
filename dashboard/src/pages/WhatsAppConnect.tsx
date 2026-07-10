@@ -1,11 +1,13 @@
 import { useState, useEffect, useRef } from 'react';
-import { Smartphone, RefreshCw, CheckCircle, XCircle, Clock, Wifi } from 'lucide-react';
+import { Smartphone, RefreshCw, CheckCircle, XCircle, Clock, Wifi, RotateCcw, Loader2 } from 'lucide-react';
 
 export default function WhatsAppConnect() {
   const [status, setStatus] = useState<'disconnected' | 'connecting' | 'connected'>('connecting');
   const [qrString, setQrString] = useState<string | null>(null);
+  const [serverError, setServerError] = useState<string | null>(null);
   const [error, setError] = useState('');
   const [lastRefresh, setLastRefresh] = useState<Date>(new Date());
+  const [restarting, setRestarting] = useState(false);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const fetchStatus = async () => {
@@ -17,10 +19,26 @@ export default function WhatsAppConnect() {
       const data = await res.json();
       setStatus(data.whatsapp?.status ?? 'disconnected');
       setQrString(data.whatsapp?.qrString ?? null);
+      setServerError(data.whatsapp?.lastError ?? null);
       setLastRefresh(new Date());
       setError('');
     } catch (err: any) {
       setError('Could not reach server');
+    }
+  };
+
+  const handleRestart = async () => {
+    setRestarting(true);
+    setQrString(null);
+    try {
+      await fetch('/api/whatsapp/restart', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
+      });
+      // Wait 10 seconds then start polling for new QR
+      setTimeout(() => { setRestarting(false); fetchStatus(); }, 10000);
+    } catch {
+      setRestarting(false);
     }
   };
 
@@ -142,20 +160,52 @@ export default function WhatsAppConnect() {
           </div>
         ) : (
           /* Waiting/Loading State */
-          <div className="p-12 flex flex-col items-center gap-4 text-center">
-            <div className="w-20 h-20 rounded-full bg-violet-500/15 border-2 border-violet-500/30 flex items-center justify-center">
-              <Clock size={40} className="text-violet-400 animate-pulse" />
-            </div>
-            <h2 className="text-xl font-extrabold font-hero text-white">Generating QR Code...</h2>
-            <p style={{ color: 'hsl(240 8% 62%)' }} className="text-sm max-w-sm">
-              Server is starting Baileys WhatsApp client. QR code will appear here in 15–30 seconds.
-            </p>
-            <div className="flex gap-1 mt-2">
-              {[0, 1, 2].map(i => (
-                <div key={i} className="w-2 h-2 rounded-full bg-violet-500 animate-bounce" style={{ animationDelay: `${i * 0.15}s` }}></div>
-              ))}
-            </div>
-            {error && <p className="text-red-400 text-xs mt-2">{error}</p>}
+          <div className="p-10 flex flex-col items-center gap-5 text-center">
+            {restarting ? (
+              <>
+                <div className="w-20 h-20 rounded-full bg-teal-500/15 border-2 border-teal-500/30 flex items-center justify-center">
+                  <Loader2 size={40} className="text-teal-400 animate-spin" />
+                </div>
+                <h2 className="text-xl font-extrabold font-hero text-white">Restarting WhatsApp...</h2>
+                <p style={{ color: 'hsl(240 8% 62%)' }} className="text-sm max-w-sm">
+                  Clearing old session and generating fresh QR code. Please wait ~10 seconds.
+                </p>
+              </>
+            ) : (
+              <>
+                <div className="w-20 h-20 rounded-full bg-violet-500/15 border-2 border-violet-500/30 flex items-center justify-center">
+                  <Clock size={40} className="text-violet-400 animate-pulse" />
+                </div>
+                <h2 className="text-xl font-extrabold font-hero text-white">Waiting for QR Code...</h2>
+                <p style={{ color: 'hsl(240 8% 62%)' }} className="text-sm max-w-sm">
+                  Baileys is starting up. QR code will appear here in 15–30 seconds.
+                </p>
+                <div className="flex gap-1">
+                  {[0,1,2].map(i => (
+                    <div key={i} className="w-2 h-2 rounded-full bg-violet-500 animate-bounce" style={{ animationDelay: `${i * 0.15}s` }}></div>
+                  ))}
+                </div>
+
+                {serverError && (
+                  <div className="w-full px-4 py-3 rounded-xl bg-red-500/10 border border-red-500/20 text-red-400 text-xs text-left">
+                    <strong>Server Error:</strong> {serverError}
+                  </div>
+                )}
+                {error && <p className="text-red-400 text-xs">{error}</p>}
+
+                {/* Restart button - always show so user can force fresh QR */}
+                <button
+                  onClick={handleRestart}
+                  className="mt-2 flex items-center gap-2 px-6 py-3 rounded-xl font-bold text-sm text-white bg-gradient-to-r from-teal-500 to-violet-600 hover:from-teal-600 hover:to-violet-700 transition-all shadow-lg active:scale-95"
+                >
+                  <RotateCcw size={16} />
+                  Force Restart &amp; Get Fresh QR
+                </button>
+                <p style={{ color: 'hsl(240 8% 45%)' }} className="text-xs">
+                  If no QR appears in 30 sec, click the button above
+                </p>
+              </>
+            )}
           </div>
         )}
       </div>
