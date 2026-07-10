@@ -1,0 +1,281 @@
+// @ts-ignore
+import { DatabaseSync } from 'node:sqlite';
+import path from 'path';
+import fs from 'fs';
+import bcrypt from 'bcryptjs';
+import dotenv from 'dotenv';
+
+dotenv.config();
+
+// Ensure data directory exists
+const dataDir = path.resolve('data');
+if (!fs.existsSync(dataDir)) {
+  fs.mkdirSync(dataDir, { recursive: true });
+}
+
+const dbPath = path.join(dataDir, 'vardan.db');
+const db = new DatabaseSync(dbPath);
+
+// Enable WAL mode for performance
+db.exec('PRAGMA journal_mode = WAL');
+
+export function initDb() {
+  // Create tables
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS patients (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      phone TEXT UNIQUE NOT NULL,
+      age INTEGER NOT NULL,
+      gender TEXT NOT NULL,
+      preferred_language TEXT NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS doctors (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      department TEXT NOT NULL,
+      phone TEXT NOT NULL,
+      weekly_schedule_json TEXT NOT NULL,
+      fee INTEGER NOT NULL,
+      active INTEGER DEFAULT 1,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS appointments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      patient_id TEXT NOT NULL,
+      doctor_id INTEGER NOT NULL,
+      date TEXT NOT NULL,
+      time_slot TEXT NOT NULL,
+      status TEXT DEFAULT 'pending',
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (patient_id) REFERENCES patients(id),
+      FOREIGN KEY (doctor_id) REFERENCES doctors(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS conversations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      patient_id TEXT NOT NULL,
+      role TEXT NOT NULL,
+      message TEXT NOT NULL,
+      agent_used TEXT NOT NULL,
+      language TEXT NOT NULL,
+      timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (patient_id) REFERENCES patients(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS follow_up_jobs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      patient_id TEXT NOT NULL,
+      doctor_id INTEGER NOT NULL,
+      trigger_date TEXT NOT NULL,
+      message_template TEXT NOT NULL,
+      status TEXT DEFAULT 'pending',
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (patient_id) REFERENCES patients(id),
+      FOREIGN KEY (doctor_id) REFERENCES doctors(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS knowledge_base (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      category TEXT NOT NULL,
+      question_variants TEXT NOT NULL, -- JSON array of variants
+      answer_hi TEXT NOT NULL,
+      answer_en TEXT NOT NULL,
+      answer_hinglish TEXT NOT NULL,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS pending_queries (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      patient_id TEXT NOT NULL,
+      question TEXT NOT NULL,
+      status TEXT DEFAULT 'pending',
+      answered_by TEXT,
+      answer TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (patient_id) REFERENCES patients(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS llm_call_logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      provider TEXT NOT NULL,
+      key_index INTEGER NOT NULL,
+      latency_ms INTEGER NOT NULL,
+      success INTEGER NOT NULL,
+      error TEXT,
+      timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS llm_keys (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      provider TEXT NOT NULL,
+      key_val TEXT UNIQUE NOT NULL,
+      cooldown_until INTEGER DEFAULT 0,
+      usage_count INTEGER DEFAULT 0,
+      active INTEGER DEFAULT 1
+    );
+
+    CREATE TABLE IF NOT EXISTS admin_users (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      username TEXT UNIQUE NOT NULL,
+      role TEXT NOT NULL,
+      password_hash TEXT NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+
+  // Create Indexes for performance
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_conversations_patient ON conversations(patient_id);
+    CREATE INDEX IF NOT EXISTS idx_appointments_doctor_date ON appointments(doctor_id, date);
+    CREATE INDEX IF NOT EXISTS idx_follow_up_jobs_status_trigger ON follow_up_jobs(status, trigger_date);
+  `);
+
+  // Seed default admin user if none exists
+  const adminCount = db.prepare('SELECT COUNT(*) as count FROM admin_users').get() as { count: number };
+  if (adminCount.count === 0) {
+    const salt = bcrypt.genSaltSync(10);
+    const hash = bcrypt.hashSync('admin123', salt);
+    db.prepare(`
+      INSERT INTO admin_users (name, username, role, password_hash)
+      VALUES (?, ?, ?, ?)
+    `).run('Vardan Owner', 'admin', 'owner', hash);
+    console.log('Seeded default admin user (username: admin, password: admin123)');
+  }
+
+  // Seed default doctors if empty
+  const docCount = db.prepare('SELECT COUNT(*) as count FROM doctors').get() as { count: number };
+  if (docCount.count === 0) {
+    const doctors = [
+      {
+        name: 'Dr. Nitin Singh',
+        department: 'Cardiology',
+        phone: '+919415577651',
+        fee: 500,
+        weekly_schedule: JSON.stringify({
+          Monday: ['10:00-14:00', '16:00-20:00'],
+          Tuesday: ['10:00-14:00', '16:00-20:00'],
+          Wednesday: ['10:00-14:00', '16:00-20:00'],
+          Thursday: ['10:00-14:00', '16:00-20:00'],
+          Friday: ['10:00-14:00', '16:00-20:00'],
+          Saturday: ['10:00-14:00', '16:00-20:00']
+        })
+      },
+      {
+        name: 'Dr. Ankit Sharma',
+        department: 'General Medicine',
+        phone: '+919415577652',
+        fee: 300,
+        weekly_schedule: JSON.stringify({
+          Monday: ['09:00-13:00', '15:00-18:00'],
+          Tuesday: ['09:00-13:00', '15:00-18:00'],
+          Wednesday: ['09:00-13:00', '15:00-18:00'],
+          Thursday: ['09:00-13:00', '15:00-18:00'],
+          Friday: ['09:00-13:00', '15:00-18:00'],
+          Saturday: ['09:00-13:00', '15:00-18:00']
+        })
+      },
+      {
+        name: 'Dr. Om Shukla',
+        department: 'Pediatrics',
+        phone: '+919415577653',
+        fee: 400,
+        weekly_schedule: JSON.stringify({
+          Monday: ['10:00-15:00'],
+          Tuesday: ['10:00-15:00'],
+          Wednesday: ['10:00-15:00'],
+          Thursday: ['10:00-15:00'],
+          Friday: ['10:00-15:00'],
+          Saturday: ['10:00-15:00']
+        })
+      }
+    ];
+
+    const stmt = db.prepare(`
+      INSERT INTO doctors (name, department, phone, weekly_schedule_json, fee)
+      VALUES (?, ?, ?, ?, ?)
+    `);
+
+    for (const doc of doctors) {
+      stmt.run(doc.name, doc.department, doc.phone, doc.weekly_schedule, doc.fee);
+    }
+    console.log('Seeded default doctors list');
+  }
+
+  // Seed LLM Keys from Env to DB
+  const providers = ['groq', 'gemini', 'openrouter'];
+  for (const prov of providers) {
+    for (let i = 1; i <= 8; i++) {
+      const keyName = `${prov.toUpperCase()}_KEY_${i}`;
+      const keyVal = process.env[keyName];
+      if (keyVal) {
+        db.prepare(`
+          INSERT INTO llm_keys (provider, key_val)
+          VALUES (?, ?)
+          ON CONFLICT(key_val) DO UPDATE SET active = 1
+        `).run(prov, keyVal);
+      }
+    }
+  }
+
+  // Seed default knowledge base entries
+  const kbCount = db.prepare('SELECT COUNT(*) as count FROM knowledge_base').get() as { count: number };
+  if (kbCount.count === 0) {
+    const kbEntries = [
+      {
+        category: 'timings',
+        question_variants: JSON.stringify([
+          'hospital timing', 'opening hours', 'what time does it open', 'kab khulta hai', 'timing kya hai',
+          'samay', 'opd timing', 'hospital open time'
+        ]),
+        answer_hi: 'वरदान हॉस्पिटल सोमवार से शनिवार सुबह 9:00 बजे से रात 8:00 बजे तक खुला रहता है। रविवार को केवल आपातकालीन सेवाएं (Emergency services) उपलब्ध हैं।',
+        answer_en: 'Vardan Hospital is open Monday to Saturday from 9:00 AM to 8:00 PM. Emergency services are available 24/7, including Sundays.',
+        answer_hinglish: 'Vardan Hospital Monday se Saturday subah 9:00 baje se raat 8:00 baje tak khula rehta hai. Sunday ko sirf emergency services available hain.'
+      },
+      {
+        category: 'location',
+        question_variants: JSON.stringify([
+          'location', 'address', 'where is it', 'kahan hai', 'pata kya hai', 'route', 'map', 'direction',
+          'bahraich location', 'hospital address'
+        ]),
+        answer_hi: 'वरदान हॉस्पिटल का पता है: बहराइच, उत्तर प्रदेश। आप गूगल मैप्स पर "वरदान हॉस्पिटल बहराइच" खोजकर आ सकते हैं।',
+        answer_en: 'Vardan Hospital is located in Bahraich, Uttar Pradesh. You can search for "Vardan Hospital Bahraich" on Google Maps for exact navigation.',
+        answer_hinglish: 'Vardan Hospital ka address Bahraich, Uttar Pradesh hai. Google Maps par "Vardan Hospital Bahraich" search karke aap exact direction dekh sakte hain.'
+      },
+      {
+        category: 'emergency',
+        question_variants: JSON.stringify([
+          'emergency', 'icu', 'accident', 'serious patient', 'ambulance', '24 hours', 'aapatkalin', 'urgency'
+        ]),
+        answer_hi: 'जी हाँ, वरदान हॉस्पिटल में 24 घंटे आपातकालीन सेवाएं, आईसीयू (ICU) और एम्बुलेंस सुविधा उपलब्ध है। आपातकाल में आप +91-9415577651 पर तुरंत कॉल कर सकते हैं।',
+        answer_en: 'Yes, Vardan Hospital offers 24/7 emergency services, ICU support, and ambulance facility. In case of emergency, contact us at +91-9415577651.',
+        answer_hinglish: 'Haan, Vardan Hospital me 24 ghante emergency services, ICU support aur ambulance facilities available hain. Emergency ke liye aap +91-9415577651 par contact karein.'
+      },
+      {
+        category: 'insurance',
+        question_variants: JSON.stringify([
+          'insurance', 'ayushman card', 'cashless', 'tpa', 'health insurance', 'ayushman bharat', 'claim'
+        ]),
+        answer_hi: 'वरदान हॉस्पिटल आयुष्मान भारत योजना (Ayushman Bharat) और कई प्रमुख स्वास्थ्य बीमा (Health Insurance) कंपनियों के साथ कैशलेस इलाज की सुविधा प्रदान करता है। कृपया रिसेप्शन पर अपना कार्ड दिखाएं।',
+        answer_en: 'Vardan Hospital supports Ayushman Bharat scheme and offers cashless treatments with major health insurance / TPA providers. Please verify at the reception desk.',
+        answer_hinglish: 'Vardan Hospital me Ayushman Bharat scheme aur major health insurance companies ke sath cashless treatment ki facility available hai. Reception par cards verify karwa sakte hain.'
+      }
+    ];
+
+    const kbStmt = db.prepare(`
+      INSERT INTO knowledge_base (category, question_variants, answer_hi, answer_en, answer_hinglish)
+      VALUES (?, ?, ?, ?, ?)
+    `);
+
+    for (const kb of kbEntries) {
+      kbStmt.run(kb.category, kb.question_variants, kb.answer_hi, kb.answer_en, kb.answer_hinglish);
+    }
+    console.log('Seeded default knowledge base (RAG)');
+  }
+}
+
+export default db;

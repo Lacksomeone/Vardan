@@ -1,0 +1,14 @@
+node_modules/
+dist/
+data/
+.env
+
+# Frontend ignores
+dashboard/node_modules/
+dashboard/dist/
+
+# OS/System files
+.DS_Store
+Thumbs.db
+*.local
+*.log

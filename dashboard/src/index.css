@@ -1,0 +1,66 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* Light Mode - Calm blues/teals */
+    --bg-primary: 210 40% 98%;
+    --bg-gradient: linear-gradient(135deg, hsl(210 40% 98%) 0%, hsl(220 30% 95%) 100%);
+    --card-bg: 0 0% 100%;
+    --card-border: 210 30% 90%;
+    --text-main: 220 40% 15%;
+    --text-muted: 220 15% 50%;
+    --accent-color: 180 80% 40%; /* Teal */
+    --accent-gradient: linear-gradient(135deg, hsl(180 80% 40%) 0%, hsl(200 85% 45%) 100%);
+    
+    --theme-primary: 180 80% 40%;
+    --theme-primary-hover: 180 80% 35%;
+  }
+
+  .dark {
+    /* Dark Mode - Deep indigo/violet gradient theme from day_400.psd */
+    --bg-primary: 255 45% 12%;
+    --bg-gradient: linear-gradient(180deg, hsl(255 45% 12%) 0%, hsl(265 55% 6%) 100%);
+    --card-bg: 255 50% 95% / 8%; /* Frosted translucent card overlay */
+    --card-border: 255 50% 95% / 15%;
+    --text-main: 0 0% 98%;
+    --text-muted: 255 10% 70%;
+    --accent-color: 265 85% 60%; /* Violet */
+    --accent-gradient: linear-gradient(135deg, hsl(265 85% 60%) 0%, hsl(325 85% 55%) 100%); /* Violet to Pink */
+    
+    --theme-primary: 265 85% 60%;
+    --theme-primary-hover: 265 85% 55%;
+  }
+
+  body {
+    background-attachment: fixed;
+    font-family: 'Plus Jakarta Sans', sans-serif;
+    color: hsl(var(--text-main));
+    transition: background-color 0.3s ease, color 0.3s ease;
+  }
+}
+
+/* Glassmorphic utilities */
+.glass-panel {
+  background-color: hsl(var(--card-bg));
+  border: 1px solid hsl(var(--card-border));
+  backdrop-filter: blur(16px);
+  border-radius: 1rem;
+}
+
+/* Custom scrollbar for premium feel */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(155, 155, 155, 0.2);
+  border-radius: 20px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(155, 155, 155, 0.4);
+}
