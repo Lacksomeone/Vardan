@@ -14,6 +14,18 @@ interface BookingSession {
 
 const bookingSessions: Record<string, BookingSession> = {};
 
+export function hasActiveBookingSession(patientId: string): boolean {
+  return !!bookingSessions[patientId];
+}
+
+export function clearBookingSession(patientId: string) {
+  if (bookingSessions[patientId]) {
+    delete bookingSessions[patientId];
+    return true;
+  }
+  return false;
+}
+
 // Helper: Convert time windows ("10:00-14:00") into 30-min slots
 function parseWindowToSlots(window: string): string[] {
   const [start, end] = window.split('-');
@@ -77,8 +89,11 @@ function getAvailableSlots(doctorId: number, dateStr: string): string[] {
 async function parseDateWithLLM(text: string): Promise<string | null> {
   const today = new Date();
   const todayStr = today.toISOString().split('T')[0];
+  const options: Intl.DateTimeFormatOptions = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' };
+  const localDateStr = today.toLocaleDateString('en-US', options);
+  
   const systemPrompt = `You are a scheduling assistant. Extract the date mentioned by the user relative to TODAY.
-TODAY's date is: ${todayStr} (local time is Friday, 10 July 2026).
+TODAY's date is: ${todayStr} (local time is ${localDateStr}).
 Extract the date in YYYY-MM-DD format.
 If the date is ambiguous or not specified, return {"date": null}.
 If it refers to a weekday (e.g., "Monday"), find the next occurrence of that weekday.
@@ -259,7 +274,8 @@ export async function handleBookingQuery(patientId: string, text: string, lang: 
     }
 
     const today = new Date(); today.setHours(0,0,0,0);
-    const chosenDate = new Date(parsedDate);
+    const [year, month, day] = parsedDate.split('-').map(Number);
+    const chosenDate = new Date(year, month - 1, day);
     if (chosenDate < today) {
       const pastDate = {
         hi: 'पिछली तारीख नहीं चुन सकते। कृपया आने वाले समय की तारीख बताएं।',
@@ -308,7 +324,14 @@ export async function handleBookingQuery(patientId: string, text: string, lang: 
   // 4. Process stage: slot
   if (session.stage === 'slot') {
     const slots = getAvailableSlots(session.doctorId!, session.date!);
-    const matchedSlot = slots.find(s => text.trim().includes(s) || s.includes(text.trim()));
+    
+    let matchedSlot: string | undefined = undefined;
+    const index = parseInt(text.trim(), 10);
+    if (!isNaN(index) && index >= 1 && index <= slots.length) {
+      matchedSlot = slots[index - 1];
+    } else {
+      matchedSlot = slots.find(s => text.trim().includes(s) || s.includes(text.trim()));
+    }
 
     if (!matchedSlot) {
       const invalidSlot = {

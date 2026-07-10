@@ -3,7 +3,7 @@ import db from './db.js';
 import { sendTextMessage } from './whatsapp.js';
 import { LLMGateway } from './llm.js';
 import { handleFaqQuery } from './agents/faq.js';
-import { handleBookingQuery } from './agents/booking.js';
+import { handleBookingQuery, hasActiveBookingSession, clearBookingSession } from './agents/booking.js';
 import { handleFollowUpResponse } from './agents/followUp.js';
 import { syncPatientToGoogleSheet } from './sheets.js';
 
@@ -17,6 +17,14 @@ interface RegSession {
 }
 
 const regSessions: Record<string, RegSession> = {};
+
+export function clearRegSession(patientId: string) {
+  if (regSessions[patientId]) {
+    delete regSessions[patientId];
+    return true;
+  }
+  return false;
+}
 
 // Helper to check if a string contains Devanagari characters
 function isHindiScript(text: string): boolean {
@@ -44,12 +52,51 @@ export async function handleIncomingMessage(msg: proto.IWebMessageInfo) {
 
   const phone = patientId.split('@')[0];
 
+  // ─── Global Reset / Restart Check ───
+  const cleanText = text.trim().toLowerCase();
+  const resetKeywords = ['restart', 'reset', 'clear', 'shuru', 'phirse', 'shuru karein', 'menu', 'main menu', 'start again', 'start', 'exit', 'cancel'];
+  const isReset = resetKeywords.includes(cleanText) || cleanText === '/restart' || cleanText === '/reset';
+
+  if (isReset) {
+    // Clear sessions
+    delete regSessions[patientId];
+    clearBookingSession(patientId);
+
+    // Send reset message depending on registration status
+    const patient = db.prepare('SELECT * FROM patients WHERE id = ?').get(patientId) as any;
+    if (!patient) {
+      // Start registration flow again
+      await handleRegistration(patientId, phone, '');
+      return;
+    } else {
+      const resetMsgs = {
+        hi: 'चैट को रीस्टार्ट कर दिया गया है। वरदान हॉस्पिटल आपकी क्या मदद कर सकता है? (आप डॉक्टरों की टाइमिंग के बारे में पूछ सकते हैं या अपॉइंटमेंट बुक कर सकते हैं।)',
+        hinglish: 'Chat ko restart kar diya gaya hai. Vardan Hospital aapki kya help kar sakta hai? (Aap doctors, timings ke baare me pooch sakte hain ya appointment book kar sakte hain.)',
+        en: 'The chat has been restarted. How can Vardan Hospital help you today? (You can ask about doctors, timings, or book an appointment.)'
+      };
+      await sendTextMessage(patientId, resetMsgs[patient.preferred_language as 'hi' | 'en' | 'hinglish'] || resetMsgs.en);
+      return;
+    }
+  }
+
   // 1. Check if patient exists in DB
   const patient = db.prepare('SELECT * FROM patients WHERE id = ?').get(patientId) as any;
 
   // 2. Handle Registration Flow
   if (!patient) {
     await handleRegistration(patientId, phone, text);
+    return;
+  }
+
+  // 2.5 Bypass Orchestrator if there is an active booking session
+  if (hasActiveBookingSession(patientId)) {
+    // Log incoming message to conversations
+    db.prepare(`
+      INSERT INTO conversations (patient_id, role, message, agent_used, language)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(patientId, 'patient', text, 'booking', patient.preferred_language);
+
+    await handleBookingQuery(patientId, text, patient.preferred_language);
     return;
   }
 

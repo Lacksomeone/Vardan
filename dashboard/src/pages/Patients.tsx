@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Search, User, Phone, MessageSquare, Globe, Clock, Calendar, ExternalLink, FileSpreadsheet } from 'lucide-react';
+import { Search, User, Phone, MessageSquare, Globe, Clock, Calendar, ExternalLink, FileSpreadsheet, RotateCcw } from 'lucide-react';
 
 interface Patient {
   id: string;
@@ -42,6 +42,32 @@ export default function Patients() {
   const [activeTab, setActiveTab] = useState<'chat' | 'appointments'>('chat');
   const [sheetUrl, setSheetUrl] = useState<string>('');
   const chatEndRef = useRef<HTMLDivElement>(null);
+  const [resetting, setResetting] = useState(false);
+
+  const handleResetSession = async () => {
+    if (!selected) return;
+    if (!window.confirm(`Are you sure you want to reset the chat session for ${selected.name}? This will clear any active registration or booking flow.`)) return;
+
+    setResetting(true);
+    try {
+      const res = await fetch(`/api/patients/${encodeURIComponent(selected.id)}/reset-session`, {
+        method: 'POST',
+        headers: authHeader()
+      });
+      if (res.ok) {
+        alert('Session reset successfully. A notification has been sent to the patient.');
+        // Refresh chat history
+        selectPatient(selected);
+      } else {
+        const data = await res.json();
+        alert(`Failed to reset session: ${data.error || 'Unknown error'}`);
+      }
+    } catch (e) {
+      console.error(e);
+      alert('Error resetting session.');
+    }
+    setResetting(false);
+  };
 
   useEffect(() => {
     fetch('/api/patients', { headers: authHeader() })
@@ -179,8 +205,15 @@ export default function Patients() {
                     <span className="flex items-center gap-1"><Globe size={9} />{selected.preferred_language}</span>
                   </div>
                 </div>
-                <div className="text-[10px] text-white/30">
-                  Registered: {new Date(selected.created_at).toLocaleDateString('en-IN')}
+                <div className="flex items-center gap-3">
+                  <button onClick={handleResetSession} disabled={resetting}
+                    className="px-3 py-1.5 rounded-lg text-xs font-bold text-red-400 border border-red-500/30 bg-red-500/10 hover:bg-red-500/20 disabled:opacity-50 transition-all flex items-center gap-1">
+                    <RotateCcw size={12} className={resetting ? 'animate-spin' : ''} />
+                    {resetting ? 'Resetting...' : 'Reset Chat Session'}
+                  </button>
+                  <div className="text-[10px] text-white/30">
+                    Registered: {new Date(selected.created_at).toLocaleDateString('en-IN')}
+                  </div>
                 </div>
               </div>
 

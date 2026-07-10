@@ -2,9 +2,11 @@ import express from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import db from '../db.js';
-import { connectionStatus, qrCodeStr, pairingCode, lastError, restartWhatsApp } from '../whatsapp.js';
+import { connectionStatus, qrCodeStr, pairingCode, lastError, restartWhatsApp, sendTextMessage } from '../whatsapp.js';
 import { LLMGateway } from '../llm.js';
 import { syncAppointmentToGoogleSheet } from '../sheets.js';
+import { clearBookingSession } from '../agents/booking.js';
+import { clearRegSession } from '../router.js';
 
 const router = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'vardan_secret_key_super_secure_9876';
@@ -220,6 +222,47 @@ router.get('/patients/:id/history', authMiddleware, (req: any, res) => {
   return res.json({ history, appointments });
 });
 
+router.post('/patients/:id/reset-session', authMiddleware, async (req: any, res) => {
+  const id = decodeURIComponent(req.params.id);
+
+  try {
+    const patient = db.prepare('SELECT * FROM patients WHERE id = ?').get(id) as any;
+    if (!patient) {
+      return res.status(404).json({ error: 'Patient not found' });
+    }
+
+    // Clear sessions
+    const regCleared = clearRegSession(id);
+    const bookingCleared = clearBookingSession(id);
+
+    // Send reset message to patient's WhatsApp
+    const resetMsg = {
+      hi: '🔄 वरदान हॉस्पिटल एडमिन द्वारा आपके चैट सेशन को रीस्टार्ट कर दिया गया है। आप अब नया मैसेज भेज सकते हैं।',
+      hinglish: '🔄 Hospital admin dwara aapka chat session restart kar diya gaya hai. Aap ab naya message bhej sakte hain.',
+      en: '🔄 Your chat session has been reset by the hospital admin. You can now start a new conversation.'
+    };
+    const lang = patient.preferred_language || 'en';
+    const msg = resetMsg[lang as 'hi' | 'en' | 'hinglish'] || resetMsg.en;
+
+    await sendTextMessage(id, msg);
+
+    // Log the reset system message in conversation
+    db.prepare(`
+      INSERT INTO conversations (patient_id, role, message, agent_used, language)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(id, 'system', 'Chat session reset by admin.', 'dashboard', lang);
+
+    return res.json({ 
+      message: 'Patient session cleared successfully and notification sent',
+      regCleared,
+      bookingCleared
+    });
+  } catch (err: any) {
+    console.error('Reset session failed:', err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 // Google Sheet link
 router.get('/sheets/url', authMiddleware, (req, res) => {
   const spreadsheetId = '1YH1C0cFZ-JAJrMV0lhkyHtC1I5aWYPVTHDRFTNNwbas';
@@ -279,9 +322,15 @@ router.get('/pending-queries', authMiddleware, (req, res) => {
   return res.json(queries);
 });
 
-router.post('/pending-queries/:id/resolve', authMiddleware, (req: any, res) => {
+router.post('/pending-queries/:id/resolve', authMiddleware, async (req: any, res) => {
   const { id } = req.params;
   const { answer, addToKb, category, question_variants } = req.body;
+
+  // Fetch query details to get patient JID
+  const queryRow = db.prepare('SELECT patient_id, question FROM pending_queries WHERE id = ?').get(id) as { patient_id: string; question: string } | undefined;
+  if (!queryRow) {
+    return res.status(404).json({ error: 'Query not found' });
+  }
 
   try {
     db.transaction(() => {
@@ -299,9 +348,24 @@ router.post('/pending-queries/:id/resolve', authMiddleware, (req: any, res) => {
           VALUES (?, ?, ?, ?, ?)
         `).run(category, JSON.stringify(question_variants), answer, answer, answer);
       }
+
+      // Retrieve patient preferred language to store conversation log correctly
+      const patient = db.prepare('SELECT preferred_language FROM patients WHERE id = ?').get(queryRow.patient_id) as { preferred_language: string } | undefined;
+      const lang = patient?.preferred_language || 'en';
+
+      // Insert resolved answer into conversation logs
+      db.prepare(`
+        INSERT INTO conversations (patient_id, role, message, agent_used, language)
+        VALUES (?, ?, ?, ?, ?)
+      `).run(queryRow.patient_id, 'bot', answer, 'faq', lang);
     })();
-    return res.json({ message: 'Query resolved successfully' });
+
+    // Send the message to patient's WhatsApp
+    await sendTextMessage(queryRow.patient_id, answer);
+
+    return res.json({ message: 'Query resolved and message sent successfully' });
   } catch (err: any) {
+    console.error('Failed to resolve query or send message:', err);
     return res.status(500).json({ error: err.message });
   }
 });
