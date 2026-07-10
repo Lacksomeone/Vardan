@@ -206,18 +206,33 @@ export function initDb() {
     console.log('Seeded default doctors list');
   }
 
-  // Seed LLM Keys from Env to DB
+  // Seed LLM Keys from Env to DB (both comma-separated and individual formats supported!)
   const providers = ['groq', 'gemini', 'openrouter'];
   for (const prov of providers) {
-    for (let i = 1; i <= 8; i++) {
-      const keyName = `${prov.toUpperCase()}_KEY_${i}`;
-      const keyVal = process.env[keyName];
-      if (keyVal) {
+    // 1. Check comma-separated variable first, e.g. GROQ_KEYS
+    const csvKeys = process.env[`${prov.toUpperCase()}_KEYS`];
+    if (csvKeys) {
+      const keysList = csvKeys.split(',').map(k => k.trim()).filter(Boolean);
+      for (const val of keysList) {
         db.prepare(`
           INSERT INTO llm_keys (provider, key_val)
           VALUES (?, ?)
           ON CONFLICT(key_val) DO UPDATE SET active = 1
-        `).run(prov, keyVal);
+        `).run(prov, val);
+      }
+      console.log(`Seeded ${keysList.length} ${prov} keys from comma-separated list`);
+    } else {
+      // 2. Fallback to individual variables, e.g. GROQ_KEY_1 ... GROQ_KEY_8
+      for (let i = 1; i <= 8; i++) {
+        const keyName = `${prov.toUpperCase()}_KEY_${i}`;
+        const keyVal = process.env[keyName];
+        if (keyVal) {
+          db.prepare(`
+            INSERT INTO llm_keys (provider, key_val)
+            VALUES (?, ?)
+            ON CONFLICT(key_val) DO UPDATE SET active = 1
+          `).run(prov, keyVal);
+        }
       }
     }
   }
