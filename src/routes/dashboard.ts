@@ -2,7 +2,7 @@ import express from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import db from '../db.js';
-import { sock, connectionStatus, qrCodeStr, lastError, restartWhatsApp } from '../whatsapp.js';
+import { connectionStatus, qrCodeStr, pairingCode, lastError, restartWhatsApp } from '../whatsapp.js';
 import { LLMGateway } from '../llm.js';
 import { syncAppointmentToGoogleSheet } from '../sheets.js';
 
@@ -311,6 +311,7 @@ router.get('/monitor/status', authMiddleware, (req, res) => {
       status: connectionStatus,
       qrAvailable: !!qrCodeStr,
       qrString: qrCodeStr,
+      pairingCode: pairingCode,
       lastError: lastError
     },
     keys: formattedKeys,
@@ -318,11 +319,12 @@ router.get('/monitor/status', authMiddleware, (req, res) => {
   });
 });
 
-// WhatsApp: Force restart / fresh QR
-router.post('/whatsapp/restart', authMiddleware, async (req, res) => {
+// WhatsApp: Restart with optional phone number for pairing code
+router.post('/whatsapp/restart', authMiddleware, async (req: any, res) => {
   try {
-    restartWhatsApp().catch(err => console.error('[Restart]', err));
-    return res.json({ message: 'WhatsApp restart initiated. New QR will appear in ~10 seconds.' });
+    const { phone } = req.body;
+    restartWhatsApp(phone).catch(err => console.error('[Restart]', err));
+    return res.json({ message: 'Restarting WhatsApp. Pairing code will appear in ~10 seconds.' });
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
   }
