@@ -228,47 +228,52 @@ export async function handleBookingQuery(patientId: string, text: string, lang: 
     session.doctorId = selectedDoc.id;
     session.stage = 'date';
 
+    // Show all available days for this week so patient knows directly
+    const doctor = selectedDoc;
+    const schedule = JSON.parse(doctor.weekly_schedule_json);
+    const availableDays = Object.entries(schedule)
+      .filter(([, v]: any) => Array.isArray(v) && v.length > 0)
+      .map(([day]) => day)
+      .join(', ');
+
     const datePrompt = {
-      hi: `Dr. ${selectedDoc.name} (${selectedDoc.department}) के लिए अपॉइंटमेंट की तारीख बताएं (जैसे: कल, या 13 July)।`,
-      hinglish: `Dr. ${selectedDoc.name} (${selectedDoc.department}) ke liye appointment ki date batayein (e.g. kal, ya 13 July).`,
-      en: `Please specify the date for your appointment with Dr. ${selectedDoc.name} (e.g. tomorrow, or 13 July).`
+      hi: `Dr. ${doctor.name} (${doctor.department}) के लिए तारीख बताएं।\n\nउपलब्ध दिन: *${availableDays}*\n\nउदाहरण: कल, सोमवार, 15 July`,
+      hinglish: `Dr. ${doctor.name} (${doctor.department}) ke liye date batayein.\n\nAvailable days: *${availableDays}*\n\nExample: kal, Monday, 15 July`,
+      en: `Please specify the date for Dr. ${doctor.name} (${doctor.department}).\n\nAvailable days: *${availableDays}*\n\nExample: tomorrow, Monday, July 15`
     };
     await sendTextMessage(patientId, datePrompt[lang]);
     return;
   }
 
-  // 3. Process stage: date
+  // 3. Process stage: date — parse date AND immediately show slots
   if (session.stage === 'date') {
     const parsedDate = await parseDateWithLLM(text);
     if (!parsedDate) {
       const invalidDate = {
-        hi: 'कृपया सही तारीख या दिन बताएं (जैसे: कल, सोमवार, या 13 July)।',
-        hinglish: 'Kripya sahi date ya day batayein (e.g. kal, Monday, ya 13 July).',
-        en: 'Please specify a valid date or day (e.g., tomorrow, Monday, or July 13).'
+        hi: 'कृपया सही तारीख बताएं (जैसे: कल, सोमवार, या 13 July)।',
+        hinglish: 'Kripya sahi date batayein (e.g. kal, Monday, ya 13 July).',
+        en: 'Please specify a valid date (e.g., tomorrow, Monday, or July 13).'
       };
       await sendTextMessage(patientId, invalidDate[lang]);
       return;
     }
 
-    // Verify date is not in past
-    const today = new Date();
-    today.setHours(0,0,0,0);
+    const today = new Date(); today.setHours(0,0,0,0);
     const chosenDate = new Date(parsedDate);
     if (chosenDate < today) {
       const pastDate = {
-        hi: 'आप पिछले समय की तारीख नहीं चुन सकते। कृपया आने वाले समय की तारीख बताएं।',
-        hinglish: 'Aap past date nahi select kar sakte. Kripya future date batayein.',
-        en: 'You cannot select a past date. Please select a future date.'
+        hi: 'पिछली तारीख नहीं चुन सकते। कृपया आने वाले समय की तारीख बताएं।',
+        hinglish: 'Past date select nahi kar sakte. Future date batayein.',
+        en: 'Cannot select a past date. Please select a future date.'
       };
       await sendTextMessage(patientId, pastDate[lang]);
       return;
     }
 
-    // Verify it is not a Sunday (Sunday hospital is closed/emergency only)
     if (chosenDate.getDay() === 0) {
       const sundayClosed = {
-        hi: 'रविवार (Sunday) को ओपीडी (OPD) बंद रहती है। कृपया कोई अन्य दिन चुनें।',
-        hinglish: 'Sunday ko OPD closed rehti hai. Kripya koi dusra day select karein.',
+        hi: 'रविवार को OPD बंद रहती है। कोई अन्य दिन चुनें।',
+        hinglish: 'Sunday ko OPD closed hai. Koi aur day select karein.',
         en: 'OPD is closed on Sundays. Please select another day.'
       };
       await sendTextMessage(patientId, sundayClosed[lang]);
@@ -278,21 +283,23 @@ export async function handleBookingQuery(patientId: string, text: string, lang: 
     const slots = getAvailableSlots(session.doctorId!, parsedDate);
     if (slots.length === 0) {
       const noSlots = {
-        hi: 'क्षमा करें, उस दिन डॉक्टर उपलब्ध नहीं हैं या सभी स्लॉट बुक हो चुके हैं। कृपया कोई अन्य तारीख चुनें।',
-        hinglish: 'Sorry, us din doctor available nahi hain ya saare slots book ho chuke hain. Kripya koi aur date select karein.',
-        en: 'Sorry, no slots are available for the doctor on that day. Please pick a different date.'
+        hi: `${parsedDate} को कोई स्लॉट उपलब्ध नहीं है। कृपया कोई अन्य तारीख बताएं।`,
+        hinglish: `${parsedDate} ko koi slot available nahi hai. Koi aur date batayein.`,
+        en: `No slots available on ${parsedDate}. Please try a different date.`
       };
       await sendTextMessage(patientId, noSlots[lang]);
       return;
     }
 
+    // ✅ Date valid + slots available — immediately show slots so patient picks directly
     session.date = parsedDate;
     session.stage = 'slot';
 
+    const slotList = slots.map((s, i) => `${i + 1}. ${s}`).join('\n');
     const slotPrompt = {
-      hi: `उपलब्ध स्लॉट नीचे दिए गए हैं, कृपया कोई एक लिखकर भेजें:\n\n${slots.join('\n')}`,
-      hinglish: `Available slots ye rahe, kripya koi ek select karke likhein:\n\n${slots.join('\n')}`,
-      en: `Available slots are listed below, please type your preferred slot:\n\n${slots.join('\n')}`
+      hi: `✅ *${parsedDate}* को उपलब्ध समय:\n\n${slotList}\n\nकृपया समय चुनें (जैसे: 10:00-10:30)`,
+      hinglish: `✅ *${parsedDate}* ke liye available slots:\n\n${slotList}\n\nKripya slot select karein (e.g. 10:00-10:30)`,
+      en: `✅ Available slots on *${parsedDate}*:\n\n${slotList}\n\nPlease select a time slot (e.g. 10:00-10:30)`
     };
     await sendTextMessage(patientId, slotPrompt[lang]);
     return;

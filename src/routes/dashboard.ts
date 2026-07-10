@@ -198,14 +198,36 @@ router.get('/patients', authMiddleware, (req, res) => {
   return res.json(patients);
 });
 
-router.get('/patients/:id/history', authMiddleware, (req, res) => {
-  const { id } = req.params;
+router.get('/patients/:id/history', authMiddleware, (req: any, res) => {
+  // Decode the patient ID — WhatsApp JIDs contain '@' which gets URL-encoded
+  const id = decodeURIComponent(req.params.id);
+  
   const history = db.prepare(`
     SELECT * FROM conversations 
     WHERE patient_id = ? 
     ORDER BY timestamp ASC
   `).all(id);
-  return res.json(history);
+  
+  // Also get patient appointments
+  const appointments = db.prepare(`
+    SELECT a.*, d.name as doctor_name, d.department
+    FROM appointments a
+    JOIN doctors d ON a.doctor_id = d.id
+    WHERE a.patient_id = ?
+    ORDER BY a.date DESC
+  `).all(id);
+  
+  return res.json({ history, appointments });
+});
+
+// Google Sheet link
+router.get('/sheets/url', authMiddleware, (req, res) => {
+  const spreadsheetId = '1YH1C0cFZ-JAJrMV0lhkyHtC1I5aWYPVTHDRFTNNwbas';
+  return res.json({
+    url: `https://docs.google.com/spreadsheets/d/${spreadsheetId}`,
+    patientsTab: `https://docs.google.com/spreadsheets/d/${spreadsheetId}/edit#gid=0`,
+    appointmentsTab: `https://docs.google.com/spreadsheets/d/${spreadsheetId}/edit#gid=1`
+  });
 });
 
 // 5. Knowledge Base Editor
