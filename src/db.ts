@@ -151,16 +151,33 @@ export function initDb() {
     CREATE INDEX IF NOT EXISTS idx_follow_up_jobs_status_trigger ON follow_up_jobs(status, trigger_date);
   `);
 
-  // Seed default admin user if none exists
-  const adminCount = db.prepare('SELECT COUNT(*) as count FROM admin_users').get() as { count: number };
-  if (adminCount.count === 0) {
-    const salt = bcrypt.genSaltSync(10);
-    const hash = bcrypt.hashSync('admin123', salt);
+  // Seed / update default admin user credentials (username: vardan, password: hospital)
+  const salt = bcrypt.genSaltSync(10);
+  const hash = bcrypt.hashSync('hospital', salt);
+  const vardanUser = db.prepare('SELECT * FROM admin_users WHERE username = ?').get('vardan');
+  if (!vardanUser) {
+    const oldAdmin = db.prepare("SELECT * FROM admin_users WHERE username = 'admin'").get();
+    if (oldAdmin) {
+      db.prepare(`
+        UPDATE admin_users
+        SET username = ?, password_hash = ?
+        WHERE username = 'admin'
+      `).run('vardan', hash);
+      console.log("Updated existing admin user credentials to username: 'vardan', password: 'hospital'");
+    } else {
+      db.prepare(`
+        INSERT INTO admin_users (name, username, role, password_hash)
+        VALUES (?, ?, ?, ?)
+      `).run('Vardan Owner', 'vardan', 'owner', hash);
+      console.log("Created default admin user credentials with username: 'vardan', password: 'hospital'");
+    }
+  } else {
     db.prepare(`
-      INSERT INTO admin_users (name, username, role, password_hash)
-      VALUES (?, ?, ?, ?)
-    `).run('Vardan Owner', 'admin', 'owner', hash);
-    console.log('Seeded default admin user (username: admin, password: admin123)');
+      UPDATE admin_users
+      SET password_hash = ?
+      WHERE username = 'vardan'
+    `).run(hash);
+    console.log("Enforced password 'hospital' for username 'vardan'");
   }
 
   // Seed default doctors if empty
