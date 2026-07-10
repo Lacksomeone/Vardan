@@ -59,3 +59,26 @@
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: rgba(155,155,155,0.2); border-radius: 20px; }
 ::-webkit-scrollbar-thumb:hover { background: rgba(155,155,155,0.4); }
+
+/* ===== Custom styling for HTML Select Dropdowns in Dark/Light themes ===== */
+select {
+  background-color: rgb(20, 18, 38) !important;
+  color: hsl(var(--text-main)) !important;
+}
+
+select option {
+  background-color: rgb(24, 22, 45) !important;
+  color: hsl(var(--text-main)) !important;
+}
+
+/* Light mode overrides */
+.light select {
+  background-color: rgb(255, 255, 255) !important;
+  color: hsl(var(--text-main)) !important;
+}
+
+.light select option {
+  background-color: rgb(255, 255, 255) !important;
+  color: hsl(var(--text-main)) !important;
+}
+
