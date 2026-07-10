@@ -6,6 +6,7 @@
   /* ===== DARK MODE — applied when <html class="dark"> ===== */
   :root,
   .dark {
+    color-scheme: dark;
     --bg-primary: 240 15% 9%;
     --card-bg-rgb: 30 27 60;
     --card-border-rgb: 80 70 120;
@@ -17,6 +18,7 @@
 
   /* ===== LIGHT MODE ===== */
   .light {
+    color-scheme: light;
     --bg-primary: 210 40% 96%;
     --card-bg-rgb: 255 255 255;
     --card-border-rgb: 200 210 225;
