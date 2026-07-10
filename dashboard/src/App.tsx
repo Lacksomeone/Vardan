@@ -12,19 +12,21 @@ import KB from './pages/KB';
 import Monitoring from './pages/Monitoring';
 
 function DashboardLayout({ user, onLogout }: { user: any; onLogout: () => void }) {
-  // Default: dark mode. Toggle adds 'light' class to html element.
-  const [lightMode, setLightMode] = useState(() => localStorage.getItem('theme') === 'light');
+  // index.html starts with class="dark" — toggle switches to light class
+  const [isDark, setIsDark] = useState(() => localStorage.getItem('theme') !== 'light');
   const location = useLocation();
 
   useEffect(() => {
-    if (lightMode) {
-      document.documentElement.classList.add('light');
-      localStorage.setItem('theme', 'light');
-    } else {
+    if (isDark) {
+      document.documentElement.classList.add('dark');
       document.documentElement.classList.remove('light');
       localStorage.setItem('theme', 'dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+      document.documentElement.classList.add('light');
+      localStorage.setItem('theme', 'light');
     }
-  }, [lightMode]);
+  }, [isDark]);
 
   const navItems = [
     { label: 'Analytics', path: '/', icon: LayoutDashboard },
@@ -82,10 +84,10 @@ function DashboardLayout({ user, onLogout }: { user: any; onLogout: () => void }
           <div className="flex items-center justify-between text-xs text-text-muted">
             <span>Welcome, {user.name}</span>
             <button
-              onClick={() => setLightMode(!lightMode)}
-              className="p-2 hover:bg-card-border/25 rounded-lg text-text-main"
+              onClick={() => setIsDark(!isDark)}
+              className="p-2 hover:bg-white/10 rounded-lg text-text-main"
             >
-              {lightMode ? <Moon size={14} /> : <Sun size={14} />}
+              {isDark ? <Sun size={14} /> : <Moon size={14} />}
             </button>
           </div>
           <button
@@ -107,10 +109,10 @@ function DashboardLayout({ user, onLogout }: { user: any; onLogout: () => void }
           </h1>
           <div className="flex items-center gap-3">
             <button
-              onClick={() => setLightMode(!lightMode)}
-              className="p-2 hover:bg-card-border/25 rounded-lg text-text-main"
+              onClick={() => setIsDark(!isDark)}
+              className="p-2 hover:bg-white/10 rounded-lg text-text-main"
             >
-              {lightMode ? <Moon size={18} /> : <Sun size={18} />}
+              {isDark ? <Sun size={18} /> : <Moon size={18} />}
             </button>
             <button onClick={onLogout} className="p-2 text-red-400">
               <LogOut size={18} />

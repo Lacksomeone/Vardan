@@ -3,57 +3,59 @@
 @tailwind utilities;
 
 @layer base {
-  /* ===== DARK MODE (DEFAULT) ===== */
-  :root {
-    --bg-primary: 255 45% 10%;
-    --card-bg-h: 255;
-    --card-bg-s: 40%;
-    --card-bg-l: 18%;
-    --card-border-h: 255;
-    --card-border-s: 30%;
-    --card-border-l: 28%;
-    --text-main: 0 0% 97%;
-    --text-muted: 240 10% 65%;
+  /* ===== DARK MODE — applied when <html class="dark"> ===== */
+  :root,
+  .dark {
+    --bg-primary: 240 15% 9%;
+    --card-bg-rgb: 30 27 60;
+    --card-border-rgb: 80 70 120;
+    --text-main: 0 0% 96%;
+    --text-muted: 240 8% 62%;
     --accent-color: 265 85% 65%;
     --theme-primary: 265 85% 65%;
-    --theme-primary-hover: 265 85% 58%;
   }
 
-  /* ===== LIGHT MODE (optional toggle) ===== */
-  :root.light {
+  /* ===== LIGHT MODE ===== */
+  .light {
     --bg-primary: 210 40% 96%;
-    --card-bg-h: 0;
-    --card-bg-s: 0%;
-    --card-bg-l: 100%;
-    --card-border-h: 210;
-    --card-border-s: 25%;
-    --card-border-l: 85%;
-    --text-main: 220 35% 12%;
-    --text-muted: 220 12% 48%;
-    --accent-color: 180 75% 38%;
-    --theme-primary: 180 75% 38%;
-    --theme-primary-hover: 180 75% 32%;
+    --card-bg-rgb: 255 255 255;
+    --card-border-rgb: 200 210 225;
+    --text-main: 220 35% 10%;
+    --text-muted: 220 12% 46%;
+    --accent-color: 180 75% 36%;
+    --theme-primary: 180 75% 36%;
   }
 
-  html, body {
+  html {
     background-color: hsl(var(--bg-primary));
     color: hsl(var(--text-main));
     font-family: 'Plus Jakarta Sans', sans-serif;
     transition: background-color 0.3s ease, color 0.3s ease;
   }
+
+  body {
+    background-color: hsl(var(--bg-primary));
+    color: hsl(var(--text-main));
+    min-height: 100vh;
+  }
 }
 
-/* ===== Glass panel utility ===== */
+/* ===== Glass panel ===== */
 .glass-panel {
-  background-color: hsl(var(--card-bg-h), var(--card-bg-s), var(--card-bg-l));
-  border: 1px solid hsl(var(--card-border-h), var(--card-border-s), var(--card-border-l));
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
+  background: rgba(var(--card-bg-rgb), 0.12);
+  border: 1px solid rgba(var(--card-border-rgb), 0.25);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
   border-radius: 1rem;
 }
 
-/* ===== Custom scrollbar ===== */
+.light .glass-panel {
+  background: rgba(var(--card-bg-rgb), 0.85);
+  border: 1px solid rgba(var(--card-border-rgb), 0.6);
+}
+
+/* ===== Scrollbar ===== */
 ::-webkit-scrollbar { width: 5px; height: 5px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: rgba(155,155,155,0.18); border-radius: 20px; }
-::-webkit-scrollbar-thumb:hover { background: rgba(155,155,155,0.38); }
+::-webkit-scrollbar-thumb { background: rgba(155,155,155,0.2); border-radius: 20px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(155,155,155,0.4); }
