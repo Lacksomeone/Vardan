@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Link, Navigate, useLocation } from 'react-router-dom';
-import { LayoutDashboard, Users, Calendar, HelpCircle, Smartphone, LogOut, Sun, Moon, Plus } from 'lucide-react';
+import { LayoutDashboard, Users, Calendar, HelpCircle, Smartphone, LogOut, Sun, Moon, Plus, Wifi } from 'lucide-react';
 
 // Import Pages
 import Login from './pages/Login';
@@ -10,6 +10,7 @@ import Appointments from './pages/Appointments';
 import Patients from './pages/Patients';
 import KB from './pages/KB';
 import Monitoring from './pages/Monitoring';
+import WhatsAppConnect from './pages/WhatsAppConnect';
 
 function DashboardLayout({ user, onLogout }: { user: any; onLogout: () => void }) {
   // index.html starts with class="dark" — toggle switches to light class
@@ -29,6 +30,7 @@ function DashboardLayout({ user, onLogout }: { user: any; onLogout: () => void }
   }, [isDark]);
 
   const navItems = [
+    { label: 'WhatsApp', path: '/whatsapp', icon: Wifi, highlight: true },
     { label: 'Analytics', path: '/', icon: LayoutDashboard },
     { label: 'Appointments', path: '/appointments', icon: Calendar },
     { label: 'Patients', path: '/patients', icon: Users },
@@ -57,10 +59,11 @@ function DashboardLayout({ user, onLogout }: { user: any; onLogout: () => void }
             </div>
           </div>
 
-          <nav className="space-y-2">
+          <nav className="space-y-1.5">
             {navItems.map((item) => {
               const Icon = item.icon;
               const isActive = location.pathname === item.path;
+              const isHighlight = (item as any).highlight;
               return (
                 <Link
                   key={item.path}
@@ -68,11 +71,16 @@ function DashboardLayout({ user, onLogout }: { user: any; onLogout: () => void }
                   className={`flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition-all ${
                     isActive
                       ? 'bg-gradient-to-r from-teal-500 to-violet-600 text-white shadow-md'
-                      : 'text-text-muted hover:bg-card-border/20 hover:text-text-main'
+                      : isHighlight
+                      ? 'bg-green-500/10 border border-green-500/20 text-green-400 hover:bg-green-500/20'
+                      : 'text-white/50 hover:bg-white/10 hover:text-white'
                   }`}
                 >
                   <Icon size={18} />
                   <span>{item.label}</span>
+                  {isHighlight && !isActive && (
+                    <span className="ml-auto w-2 h-2 rounded-full bg-green-400 animate-pulse"></span>
+                  )}
                 </Link>
               );
             })}
@@ -123,13 +131,14 @@ function DashboardLayout({ user, onLogout }: { user: any; onLogout: () => void }
         {/* Central Router Pages Display */}
         <main className="flex-1 overflow-hidden">
           <Routes>
+            <Route path="/whatsapp" element={<WhatsAppConnect />} />
             <Route path="/" element={<Analytics />} />
             <Route path="/doctors" element={<Doctors userRole={user.role} />} />
             <Route path="/appointments" element={<Appointments />} />
             <Route path="/patients" element={<Patients />} />
             <Route path="/kb" element={<KB />} />
             <Route path="/monitor" element={<Monitoring />} />
-            <Route path="*" element={<Navigate to="/" replace />} />
+            <Route path="*" element={<Navigate to="/whatsapp" replace />} />
           </Routes>
         </main>
 
