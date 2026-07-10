@@ -9,7 +9,7 @@ import { syncPatientToGoogleSheet } from './sheets.js';
 
 // In-memory registration session map
 interface RegSession {
-  stage: 'name' | 'age' | 'gender';
+  stage: 'lang_select' | 'name' | 'age' | 'gender';
   name?: string;
   age?: number;
   gender?: string;
@@ -121,17 +121,50 @@ async function handleRegistration(patientId: string, phone: string, text: string
   let session = regSessions[patientId];
 
   if (!session) {
-    // Determine language from first message
-    const lang = detectInitialLanguage(text);
-    regSessions[patientId] = { stage: 'name', lang };
+    // First message — show language selection menu
+    regSessions[patientId] = { stage: 'lang_select', lang: 'hi' };
+    
+    const langMenu = 
+`🏥 *Vardan Hospital, Bahraich*
+वरदान हॉस्पिटल, बहराइच में आपका स्वागत है!
+
+Please choose your language / भाषा चुनें:
+
+1️⃣  हिंदी (Hindi)
+2️⃣  English
+3️⃣  Hinglish (Roman Hindi)
+
+Reply with 1, 2, or 3`;
+    
+    await sendTextMessage(patientId, langMenu);
+    return;
+  }
+
+  // Language selection stage
+  if (session.stage === 'lang_select') {
+    const choice = text.trim();
+    let selectedLang: 'hi' | 'en' | 'hinglish' = 'hinglish';
+    
+    if (choice === '1' || choice.toLowerCase().includes('hindi') || choice.includes('हिंदी')) {
+      selectedLang = 'hi';
+    } else if (choice === '2' || choice.toLowerCase().includes('english')) {
+      selectedLang = 'en';
+    } else if (choice === '3' || choice.toLowerCase().includes('hinglish')) {
+      selectedLang = 'hinglish';
+    } else {
+      // Auto-detect from text if not a valid choice
+      selectedLang = detectInitialLanguage(text);
+    }
+    
+    session.lang = selectedLang;
+    session.stage = 'name';
     
     const welcomeMsgs = {
-      hi: 'वरदान हॉस्पिटल (बहराइच) में आपका स्वागत है। आप हमारे नए मरीज लग रहे हैं। कृपया रजिस्ट्रेशन के लिए अपना पूरा नाम लिखकर भेजें।',
-      hinglish: 'Vardan Hospital (Bahraich) me aapka swagat hai. Aap hamare naye patient lag rahe hain. Kripya registration ke liye apna full name likhkar bhejein.',
-      en: 'Welcome to Vardan Hospital (Bahraich). You seem to be a new patient. Please reply with your full name to start registration.'
+      hi: '✅ बढ़िया! आप हमारे नए मरीज लग रहे हैं।\n\nरजिस्ट्रेशन के लिए कृपया अपना *पूरा नाम* लिखकर भेजें।',
+      hinglish: '✅ Great! Aap hamare naye patient lag rahe hain.\n\nRegistration ke liye kripya apna *full name* likhkar bhejein.',
+      en: '✅ Great! You appear to be a new patient.\n\nPlease reply with your *full name* to start registration.'
     };
-    
-    await sendTextMessage(patientId, welcomeMsgs[lang]);
+    await sendTextMessage(patientId, welcomeMsgs[selectedLang]);
     return;
   }
 
