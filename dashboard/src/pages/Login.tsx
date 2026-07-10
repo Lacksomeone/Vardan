@@ -36,17 +36,17 @@ export default function Login({ onLoginSuccess }: LoginProps) {
   };
 
   return (
-    <div className="flex items-center justify-center min-h-screen px-4">
-      <div className="w-full max-w-md p-8 glass-panel border border-card-border shadow-2xl relative overflow-hidden">
+    <div className="flex items-center justify-center min-h-screen px-4 bg-slate-950 text-slate-100">
+      <div className="w-full max-w-md p-8 bg-slate-900/60 backdrop-blur-xl border border-slate-800 rounded-2xl shadow-2xl relative overflow-hidden">
         {/* Glow accent */}
-        <div className="absolute -top-24 -left-24 w-48 h-48 rounded-full bg-accent-color opacity-20 blur-3xl pointer-events-none"></div>
+        <div className="absolute -top-24 -left-24 w-48 h-48 rounded-full bg-teal-500 opacity-20 blur-3xl pointer-events-none"></div>
         <div className="absolute -bottom-24 -right-24 w-48 h-48 rounded-full bg-pink-500 opacity-20 blur-3xl pointer-events-none"></div>
 
         <div className="text-center mb-8 relative">
           <h1 className="text-3xl font-extrabold font-hero tracking-tight bg-gradient-to-r from-teal-400 via-violet-500 to-pink-500 bg-clip-text text-transparent">
             VardanAI Portal
           </h1>
-          <p className="text-text-muted mt-2 font-body text-sm">
+          <p className="text-slate-400 mt-2 font-body text-sm">
             Vardan Hospital Admin Management Console
           </p>
         </div>
@@ -59,24 +59,24 @@ export default function Login({ onLoginSuccess }: LoginProps) {
 
         <form onSubmit={handleSubmit} className="space-y-5 relative">
           <div>
-            <label className="block text-sm font-semibold text-text-muted mb-2 font-body">Username</label>
+            <label className="block text-sm font-semibold text-slate-300 mb-2 font-body">Username</label>
             <input
               type="text"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
-              className="w-full px-4 py-3 bg-card-bg border border-card-border rounded-xl text-text-main focus:outline-none focus:ring-2 focus:ring-accent-color/50 font-body transition-all"
+              className="w-full px-4 py-3 bg-slate-950/80 border border-slate-800 rounded-xl text-slate-100 placeholder-slate-600 focus:outline-none focus:ring-2 focus:ring-teal-500/50 font-body transition-all"
               placeholder="Enter username"
               required
             />
           </div>
 
           <div>
-            <label className="block text-sm font-semibold text-text-muted mb-2 font-body">Password</label>
+            <label className="block text-sm font-semibold text-slate-300 mb-2 font-body">Password</label>
             <input
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              className="w-full px-4 py-3 bg-card-bg border border-card-border rounded-xl text-text-main focus:outline-none focus:ring-2 focus:ring-accent-color/50 font-body transition-all"
+              className="w-full px-4 py-3 bg-slate-950/80 border border-slate-800 rounded-xl text-slate-100 placeholder-slate-600 focus:outline-none focus:ring-2 focus:ring-teal-500/50 font-body transition-all"
               placeholder="Enter password"
               required
             />

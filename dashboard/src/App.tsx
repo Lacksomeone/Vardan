@@ -12,16 +12,19 @@ import KB from './pages/KB';
 import Monitoring from './pages/Monitoring';
 
 function DashboardLayout({ user, onLogout }: { user: any; onLogout: () => void }) {
-  const [darkMode, setDarkMode] = useState(true);
+  // Default: dark mode. Toggle adds 'light' class to html element.
+  const [lightMode, setLightMode] = useState(() => localStorage.getItem('theme') === 'light');
   const location = useLocation();
 
   useEffect(() => {
-    if (darkMode) {
-      document.documentElement.classList.add('dark');
+    if (lightMode) {
+      document.documentElement.classList.add('light');
+      localStorage.setItem('theme', 'light');
     } else {
-      document.documentElement.classList.remove('dark');
+      document.documentElement.classList.remove('light');
+      localStorage.setItem('theme', 'dark');
     }
-  }, [darkMode]);
+  }, [lightMode]);
 
   const navItems = [
     { label: 'Analytics', path: '/', icon: LayoutDashboard },
@@ -79,10 +82,10 @@ function DashboardLayout({ user, onLogout }: { user: any; onLogout: () => void }
           <div className="flex items-center justify-between text-xs text-text-muted">
             <span>Welcome, {user.name}</span>
             <button
-              onClick={() => setDarkMode(!darkMode)}
+              onClick={() => setLightMode(!lightMode)}
               className="p-2 hover:bg-card-border/25 rounded-lg text-text-main"
             >
-              {darkMode ? <Sun size={14} /> : <Moon size={14} />}
+              {lightMode ? <Moon size={14} /> : <Sun size={14} />}
             </button>
           </div>
           <button
@@ -104,10 +107,10 @@ function DashboardLayout({ user, onLogout }: { user: any; onLogout: () => void }
           </h1>
           <div className="flex items-center gap-3">
             <button
-              onClick={() => setDarkMode(!darkMode)}
+              onClick={() => setLightMode(!lightMode)}
               className="p-2 hover:bg-card-border/25 rounded-lg text-text-main"
             >
-              {darkMode ? <Sun size={18} /> : <Moon size={18} />}
+              {lightMode ? <Moon size={18} /> : <Sun size={18} />}
             </button>
             <button onClick={onLogout} className="p-2 text-red-400">
               <LogOut size={18} />
