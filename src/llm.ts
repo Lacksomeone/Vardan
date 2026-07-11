@@ -141,8 +141,9 @@ export class LLMGateway {
         this.logCall(keyRecord.provider, keyRecord.id, latency, true);
         return { provider: keyRecord.provider, content: response, latency } as RaceResult;
       } catch (err: any) {
-        if (err.name === 'AbortError' || err.message?.includes('aborted')) {
-          throw err;
+        if (controller.signal.aborted || err.name === 'AbortError' || err.message?.includes('aborted')) {
+          // Resolve silently to prevent UnhandledPromiseRejection when calls are aborted in the background
+          return { provider: keyRecord.provider, content: '', latency: 0 } as any;
         }
 
         const latency = Date.now() - start;
