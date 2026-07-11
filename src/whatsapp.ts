@@ -21,6 +21,7 @@ export let qrCodeStr: string | null = null;
 export let pairingCode: string | null = null;
 export let connectionStatus: 'disconnected' | 'connecting' | 'connected' = 'disconnected';
 export let lastError: string | null = null;
+const processedMessageIds = new Set<string>();
 
 // Phone number to pair with (set via dashboard)
 let pairingPhone: string | null = process.env.WA_PHONE_NUMBER || null;
@@ -148,6 +149,22 @@ export async function connectToWhatsApp() {
       if (m.type !== 'notify') return;
       for (const msg of m.messages) {
         if (msg.key.fromMe || !msg.message) continue;
+
+        // Deduplicate incoming messages using their unique message ID
+        const msgId = msg.key.id;
+        if (msgId) {
+          if (processedMessageIds.has(msgId)) {
+            console.log(`[WhatsApp] Ignoring duplicate message upsert: ${msgId}`);
+            continue;
+          }
+          processedMessageIds.add(msgId);
+          // Limit cache size to 500
+          if (processedMessageIds.size > 500) {
+            const first = processedMessageIds.values().next().value;
+            if (first) processedMessageIds.delete(first);
+          }
+        }
+
         msgQueue.push(msg, (qMsg) => handleIncomingMessage(qMsg));
       }
     });
