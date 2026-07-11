@@ -85,8 +85,41 @@ export async function handleIncomingMessage(msg: proto.IWebMessageInfo) {
   if (!patientId) return;
 
   const imageMsg = msg.message?.imageMessage;
-  const text = msg.message?.conversation || 
+  const audioMsg = msg.message?.audioMessage;
+  let text = msg.message?.conversation || 
                msg.message?.extendedTextMessage?.text || '';
+  let isVoice = false;
+
+  // ─── Voice / Audio Transcription Flow ───
+  if (audioMsg) {
+    try {
+      const buffer = await downloadMediaMessage(msg, 'buffer', {});
+      if (buffer) {
+        const base64Data = buffer.toString('base64');
+        const mimeType = audioMsg.mimetype || 'audio/ogg';
+        const transcript = await LLMGateway.getInstance().transcribeAudio(base64Data, mimeType);
+        if (transcript && transcript.trim()) {
+          console.log(`[WhatsApp Voice Transcribe] Transcribed audio to: "${transcript}"`);
+          text = transcript;
+          isVoice = true;
+        } else {
+          console.log(`[WhatsApp Voice Transcribe] Empty transcript returned for audio message`);
+          const patient = db.prepare('SELECT preferred_language FROM patients WHERE id = ?').get(patientId) as any;
+          const lang = patient ? patient.preferred_language : 'hi';
+          const cantUnderstand = {
+            hi: '🎤 क्षमा करें, मैं आपके वॉयस मैसेज की आवाज़ नहीं समझ सका। कृपया टाइप करके भेजें या फिर से स्पष्ट वॉयस मैसेज भेजें।',
+            hinglish: '🎤 Sorry, main aapke voice message ki aawaz nahi samajh saka. Kripya type karke bhejein ya clear voice message send karein.',
+            en: '🎤 Sorry, I could not understand your voice message. Please reply with text or send a clearer voice message.'
+          };
+          await sendTextMessage(patientId, cantUnderstand[lang as 'hi' | 'en' | 'hinglish'] || cantUnderstand.en);
+          return;
+        }
+      }
+    } catch (err) {
+      console.error('[WhatsApp Voice Transcribe] Transcription error:', err);
+      return;
+    }
+  }
   
   if (!imageMsg && !text.trim()) return;
 
@@ -297,10 +330,11 @@ JSON Schema:
   // 2.5 Bypass Orchestrator if there is an active booking session
   if (hasActiveBookingSession(patientId)) {
     // Log incoming message to conversations
+    const loggedMessage = isVoice ? `🎤 [Voice Note]: ${text}` : text;
     db.prepare(`
       INSERT INTO conversations (patient_id, role, message, agent_used, language)
       VALUES (?, ?, ?, ?, ?)
-    `).run(patientId, 'patient', text, 'booking', patient.preferred_language);
+    `).run(patientId, 'patient', loggedMessage, 'booking', patient.preferred_language);
 
     await handleBookingQuery(patientId, text, patient.preferred_language);
     return;
@@ -308,10 +342,11 @@ JSON Schema:
 
   // 3. Registered patient routing
   // Insert incoming message into conversations table
+  const loggedMessage = isVoice ? `🎤 [Voice Note]: ${text}` : text;
   db.prepare(`
     INSERT INTO conversations (patient_id, role, message, agent_used, language)
     VALUES (?, ?, ?, ?, ?)
-  `).run(patientId, 'patient', text, 'router', patient.preferred_language);
+  `).run(patientId, 'patient', loggedMessage, 'router', patient.preferred_language);
 
   // Call LLM Router for intent classification and language check
   const llmGateway = LLMGateway.getInstance();
@@ -332,7 +367,7 @@ JSON Schema:
   let detectedLang = patient.preferred_language || 'en';
 
   try {
-    const routingResultStr = await llmGateway.getChatCompletion('groq', {
+    const routingResultStr = await llmGateway.getChatCompletion('openrouter', {
       systemPrompt,
       userPrompt: text,
       responseFormatJson: true

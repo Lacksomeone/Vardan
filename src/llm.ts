@@ -98,7 +98,7 @@ export class LLMGateway {
     `).run(provider, keyIndex, latencyMs, success ? 1 : 0, error || null);
   }
 
-  // Primary method: Race multiple keys/providers in parallel to respond in under 1 second
+  // Primary method: Hybrid race in parallel to favor preferred accurate/reasoning provider
   public async getChatCompletion(
     preferredProvider: 'groq' | 'gemini' | 'openrouter',
     params: LLMCallParams
@@ -116,9 +116,15 @@ export class LLMGateway {
       return this.runSingleKeyWithRetry(keysBatch[0], params);
     }
 
+    interface RaceResult {
+      provider: string;
+      content: string;
+      latency: number;
+    }
+
     const controllers = keysBatch.map(() => new AbortController());
     
-    const promises = keysBatch.map(async (keyRecord, index) => {
+    const executionPromises = keysBatch.map(async (keyRecord, index) => {
       const controller = controllers[index];
       const start = Date.now();
       try {
@@ -133,15 +139,8 @@ export class LLMGateway {
         // Success: log usage & latency
         this.incrementUsage(keyRecord.id);
         this.logCall(keyRecord.provider, keyRecord.id, latency, true);
-        
-        // Abort all other active requests in the race
-        controllers.forEach((c, idx) => {
-          if (idx !== index) c.abort();
-        });
-
-        return response;
+        return { provider: keyRecord.provider, content: response, latency } as RaceResult;
       } catch (err: any) {
-        // If it was aborted by another winner, ignore
         if (err.name === 'AbortError' || err.message?.includes('aborted')) {
           throw err;
         }
@@ -156,10 +155,46 @@ export class LLMGateway {
       }
     });
 
+    const preferredIndex = keysBatch.findIndex(k => k.provider === preferredProvider);
+    
+    if (preferredIndex !== -1) {
+      const preferredPromise = executionPromises[preferredIndex];
+      
+      // Let the preferred reasoning provider run for up to 2.5 seconds
+      let timeoutId: any;
+      const timeoutPromise = new Promise<null>((resolve) => {
+        timeoutId = setTimeout(() => resolve(null), 2500);
+      });
+
+      try {
+        const preferredResult = await Promise.race([preferredPromise, timeoutPromise]);
+        
+        if (preferredResult) {
+          clearTimeout(timeoutId);
+          // Abort all other runs since the preferred accurate model won!
+          controllers.forEach((c, idx) => {
+            if (idx !== preferredIndex) c.abort();
+          });
+          return preferredResult.content;
+        } else {
+          console.log(`[LLM Race] Preferred provider "${preferredProvider}" took more than 2.5s. Falling back to the fastest completed response.`);
+        }
+      } catch (err) {
+        console.log(`[LLM Race] Preferred provider "${preferredProvider}" failed. Falling back to other active responses.`);
+      }
+    }
+
     try {
-      // Promise.any resolves as soon as the first successful response is returned
-      const result = await Promise.any(promises);
-      return result;
+      // Return the fastest completed alternative response
+      const winner = await Promise.any(executionPromises);
+      
+      // Abort other remaining controllers
+      controllers.forEach((c, idx) => {
+        if (keysBatch[idx].provider !== winner.provider) {
+          c.abort();
+        }
+      });
+      return winner.content;
     } catch (err) {
       console.warn('All keys in the parallel batch failed. Retrying with backup key...');
       
@@ -200,6 +235,11 @@ export class LLMGateway {
     }
   }
 
+  private cleanThinkTags(content: string): string {
+    if (!content) return '';
+    return content.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+  }
+
   // Execute the REST API call with abort signal
   private async executeCallWithController(
     provider: 'groq' | 'gemini' | 'openrouter',
@@ -236,7 +276,7 @@ export class LLMGateway {
         }
 
         const data = await response.json() as any;
-        return data.choices[0].message.content || '';
+        return this.cleanThinkTags(data.choices[0].message.content || '');
 
       } else if (provider === 'gemini') {
         const response = await fetch(
@@ -273,7 +313,7 @@ export class LLMGateway {
         }
 
         const data = await response.json() as any;
-        return data.candidates[0].content.parts[0].text || '';
+        return this.cleanThinkTags(data.candidates[0].content.parts[0].text || '');
 
       } else {
         // OpenRouter
@@ -286,7 +326,7 @@ export class LLMGateway {
             'X-Title': 'VardanAI'
           },
           body: JSON.stringify({
-            model: 'meta-llama/llama-3-8b-instruct:free',
+            model: 'deepseek/deepseek-r1:free',
             messages: [
               { role: 'system', content: params.systemPrompt },
               { role: 'user', content: params.userPrompt }
@@ -304,7 +344,7 @@ export class LLMGateway {
         }
 
         const data = await response.json() as any;
-        return data.choices[0].message.content || '';
+        return this.cleanThinkTags(data.choices[0].message.content || '');
       }
     } catch (error: any) {
       clearTimeout(timeoutId);
@@ -396,4 +436,87 @@ export class LLMGateway {
       throw err;
     }
   }
+
+  // Transcribe an audio file buffer (base64) using Gemini 1.5/3.5 Flash
+  public async transcribeAudio(
+    base64Data: string,
+    mimeType: string
+  ): Promise<string> {
+    this.reloadKeys();
+    const geminiKeys = this.keys.filter(
+      (k) => k.provider === 'gemini' && k.active === 1 && k.cooldown_until < Date.now()
+    );
+    if (geminiKeys.length === 0) {
+      throw new Error('No active Gemini API keys are available for audio transcription.');
+    }
+    // Sort by usage count
+    geminiKeys.sort((a, b) => a.usage_count - b.usage_count);
+    const keyRecord = geminiKeys[0];
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 30000); // 30s timeout
+
+    const start = Date.now();
+    try {
+      // Strip any data URI prefix if present
+      const cleanBase64 = base64Data.replace(/^data:[^;]+;base64,/, '');
+
+      // Clean mimeType to ensure no parameters like ;codecs=opus are sent
+      let cleanMimeType = mimeType.split(';')[0].trim();
+      if (!cleanMimeType.startsWith('audio/')) {
+        cleanMimeType = 'audio/ogg'; // fallback
+      }
+
+      const response = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=${keyRecord.key_val}`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            contents: [
+              {
+                role: 'user',
+                parts: [
+                  {
+                    inlineData: {
+                      mimeType: cleanMimeType,
+                      data: cleanBase64
+                    }
+                  },
+                  {
+                    text: "You are a speech-to-text transcriber for Vardan Hospital. Transcribe this audio exactly. Do not add any introductory or explanatory text. Respond with ONLY the text of the speech. If there is no speech, respond with an empty string."
+                  }
+                ]
+              }
+            ],
+            generationConfig: {
+              temperature: 0.1
+            }
+          }),
+          signal: controller.signal
+        }
+      );
+
+      clearTimeout(timeoutId);
+      if (!response.ok) {
+        const errText = await response.text();
+        throw new Error(`Gemini HTTP ${response.status}: ${errText}`);
+      }
+
+      const data = await response.json() as any;
+      const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+
+      this.incrementUsage(keyRecord.id);
+      this.logCall(keyRecord.provider, keyRecord.id, Date.now() - start, true);
+      return text.trim();
+    } catch (err: any) {
+      clearTimeout(timeoutId);
+      this.setCooldown(keyRecord.id, 60000);
+      this.logCall(keyRecord.provider, keyRecord.id, Date.now() - start, false, err.message || String(err));
+      throw err;
+    }
+  }
 }
+

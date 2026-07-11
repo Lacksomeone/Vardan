@@ -13,7 +13,7 @@ if (!fs.existsSync(dataDir)) {
   fs.mkdirSync(dataDir, { recursive: true });
 }
 
-const dbPath = path.join(dataDir, 'vardan.db');
+const dbPath = path.join(dataDir, process.env.NODE_ENV === 'test' ? 'test_vardan.db' : 'vardan.db');
 const db = new DatabaseSync(dbPath);
 
 // Enable WAL mode for performance
@@ -56,6 +56,12 @@ export function initDb() {
   } catch (e) {}
   try {
     db.exec('ALTER TABLE doctors ADD COLUMN services TEXT;');
+  } catch (e) {}
+  try {
+    db.exec('ALTER TABLE doctors ADD COLUMN active INTEGER DEFAULT 1;');
+  } catch (e) {}
+  try {
+    db.exec('UPDATE doctors SET active = 1 WHERE active IS NULL;');
   } catch (e) {}
 
   // Doctor documents table for categorized file uploads
@@ -292,6 +298,12 @@ export function initDb() {
   }
 
 
+  // Deactivate all existing keys first so that only current keys from env will be active
+  try {
+    db.exec('UPDATE llm_keys SET active = 0');
+    console.log('Deactivated older keys in DB for clean refresh');
+  } catch (e) {}
+
   // Seed LLM Keys from Env to DB (both comma-separated and individual formats supported!)
   const providers = ['groq', 'gemini', 'openrouter'];
   for (const prov of providers) {
@@ -308,8 +320,8 @@ export function initDb() {
       }
       console.log(`Seeded ${keysList.length} ${prov} keys from comma-separated list`);
     } else {
-      // 2. Fallback to individual variables, e.g. GROQ_KEY_1 ... GROQ_KEY_8
-      for (let i = 1; i <= 8; i++) {
+      // 2. Fallback to individual variables, e.g. GROQ_KEY_1 ... GROQ_KEY_12
+      for (let i = 1; i <= 12; i++) {
         const keyName = `${prov.toUpperCase()}_KEY_${i}`;
         const keyVal = process.env[keyName];
         if (keyVal) {

@@ -230,3 +230,52 @@ export async function restartWhatsApp(phone?: string) {
   try { fs.rmSync(authDir, { recursive: true, force: true }); } catch (_) {}
   await connectToWhatsApp();
 }
+
+// ─── Send Image Message ───────────────────────────────────────────────────────
+export async function sendImageMessage(toJid: string, imageUrl: string, caption?: string) {
+  if (process.env.NODE_ENV === 'test') {
+    console.log(`   [TEST MOCK SEND IMAGE] to: ${toJid} Image: ${imageUrl} Caption: ${caption || ''}`);
+    return;
+  }
+  if (!sock || connectionStatus !== 'connected') {
+    throw new Error('WhatsApp not connected');
+  }
+  let jid = toJid.includes('@') ? toJid : `${toJid}@s.whatsapp.net`;
+  if (jid.startsWith('+')) {
+    jid = jid.substring(1);
+  }
+
+  // Handle local uploaded files (if imageUrl starts with /uploads/ or uploads/)
+  let imageSource: any;
+  if (imageUrl.startsWith('/uploads/') || imageUrl.startsWith('uploads/')) {
+    const localPath = path.resolve(imageUrl.replace(/^\//, ''));
+    if (fs.existsSync(localPath)) {
+      imageSource = fs.readFileSync(localPath);
+    } else {
+      imageSource = { url: imageUrl };
+    }
+  } else {
+    // remote URL or other format
+    imageSource = { url: imageUrl };
+  }
+
+  await sock.sendMessage(jid, { 
+    image: imageSource, 
+    caption: caption || '' 
+  });
+
+  // Log outgoing message to conversations table if recipient is a patient
+  try {
+    const patient = db.prepare('SELECT preferred_language FROM patients WHERE id = ?').get(jid) as { preferred_language: string } | undefined;
+    if (patient) {
+      const logText = caption ? `[Photo Sent] ${caption}` : '[Photo Sent]';
+      db.prepare(`
+        INSERT INTO conversations (patient_id, role, message, agent_used, language)
+        VALUES (?, 'bot', ?, 'bulk_sender', ?)
+      `).run(jid, logText, patient.preferred_language);
+    }
+  } catch (err) {
+    console.error('[WhatsApp] Failed to log outgoing image message to database:', err);
+  }
+}
+

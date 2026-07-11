@@ -21,8 +21,14 @@ export async function handleFollowUpResponse(patientId: string, text: string, la
   const systemPrompt = `You are the Follow-Up analysis assistant for Vardan Hospital.
 Analyze the patient's recovery/health response: "${text}"
 And decide if they:
-1. "need_booking": Still have symptoms, feel worse, or explicitly ask to book an appointment/see the doctor.
-2. "recovered": Feel better, recovery is complete, or thank the doctor, with no immediate medical visit required.
+1. "need_booking": Still have symptoms, feel worse, are in pain, or explicitly ask to book an appointment/see the doctor.
+   Examples of "need_booking": 
+   - "sar me dard hai", "dard ho raha hai", "bukhar hai", "relief nahi mila", "not feeling well", "still sick".
+   - "appointment book kardo", "doctor se milna hai", "dikhaana hai".
+2. "recovered": Feel better, recovery is complete, say they are fine, or thank the doctor, with no immediate medical visit required.
+   Examples of "recovered":
+   - "theek hu ab", "thik hu", "better now", "recovery complete", "ab dard nahi hai", "recovery ho gayi".
+   - "thank you doctor", "dhanyawad", "shukriya".
 
 Format output as strict JSON:
 {"status": "need_booking" | "recovered"}`;
@@ -30,7 +36,7 @@ Format output as strict JSON:
   const llmGateway = LLMGateway.getInstance();
   let status = 'recovered';
   try {
-    const resultStr = await llmGateway.getChatCompletion('groq', {
+    const resultStr = await llmGateway.getChatCompletion('openrouter', {
       systemPrompt,
       userPrompt: text,
       responseFormatJson: true

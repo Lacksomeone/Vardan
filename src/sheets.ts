@@ -13,8 +13,13 @@ let sheetsClient: any = null;
 function getSheetsClient() {
   if (sheetsClient) return sheetsClient;
 
-  if (!CLIENT_EMAIL || !PRIVATE_KEY) {
-    console.warn('Google Sheets API credentials not set in .env. Skipping Service Account fallback.');
+  if (
+    !CLIENT_EMAIL ||
+    !PRIVATE_KEY ||
+    CLIENT_EMAIL.includes('your-service-account-email') ||
+    PRIVATE_KEY.includes('YOUR_PRIVATE_KEY_HERE')
+  ) {
+    console.warn('Google Sheets API credentials not set or contain placeholders in .env. Skipping Service Account fallback.');
     return null;
   }
 

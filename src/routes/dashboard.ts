@@ -4,7 +4,7 @@ import jwt from 'jsonwebtoken';
 import fs from 'fs';
 import path from 'path';
 import db from '../db.js';
-import { connectionStatus, qrCodeStr, pairingCode, lastError, restartWhatsApp, sendTextMessage } from '../whatsapp.js';
+import { connectionStatus, qrCodeStr, pairingCode, lastError, restartWhatsApp, sendTextMessage, sendImageMessage } from '../whatsapp.js';
 import { LLMGateway } from '../llm.js';
 import { syncAppointmentToGoogleSheet } from '../sheets.js';
 import { clearBookingSession } from '../agents/booking.js';
@@ -802,3 +802,39 @@ router.post('/followups', authMiddleware, (req: any, res) => {
     return res.status(500).json({ error: err.message });
   }
 });
+
+// POST send customizable greetings/offers/messages in bulk with option for photo
+router.post('/followups/bulk', authMiddleware, async (req: any, res) => {
+  const { patientIds, message, imageUrl } = req.body;
+  if (!patientIds || !Array.isArray(patientIds) || patientIds.length === 0 || !message) {
+    return res.status(400).json({ error: 'patientIds (array) and message (string) are required' });
+  }
+
+  const results = { success: 0, failed: 0, errors: [] as string[] };
+
+  for (const patientId of patientIds) {
+    try {
+      const patient = db.prepare('SELECT id FROM patients WHERE id = ?').get(patientId) as any;
+      if (!patient) {
+        throw new Error(`Patient ${patientId} not found`);
+      }
+
+      if (imageUrl) {
+        await sendImageMessage(patientId, imageUrl, message);
+      } else {
+        await sendTextMessage(patientId, message);
+      }
+
+      results.success++;
+    } catch (err: any) {
+      results.failed++;
+      results.errors.push(`${patientId}: ${err.message}`);
+    }
+  }
+
+  return res.json({
+    message: `Bulk message job completed. Sent: ${results.success}, Failed: ${results.failed}`,
+    results
+  });
+});
+

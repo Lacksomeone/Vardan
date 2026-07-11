@@ -31,9 +31,9 @@ export async function runSchedulerCheck() {
 
       // Rich reminder message with doctor name + booking prompt
       const templates = {
-        hi: `🏥 *वरदान हॉस्पिटल - फॉलो-अप रिमाइंडर*\n\nनमस्ते ${name} जी! 🙏\n\nआपकी दवाइयाँ कल खत्म हो रही हैं। कृपया कल *Dr. ${doctor}* से दोबारा मिलें या नई दवा लें।\n\n📅 क्या आप अभी अपॉइंटमेंट बुक करना चाहते हैं?\n👉 *"हाँ"* लिखें — हम तुरंत बुक करेंगे\n👉 *"ठीक हूँ"* लिखें — अगर आप ठीक हैं`,
-        hinglish: `🏥 *Vardan Hospital - Follow-Up Reminder*\n\nNamaste ${name} ji! 🙏\n\nAapki dawaiyan kal khatam ho rahi hain. Kripya kal *Dr. ${doctor}* se dobara milein ya nai dawa lein.\n\n📅 Kya aap abhi appointment book karna chahte hain?\n👉 *"Haan"* likhein — hum turant book karenge\n👉 *"Theek hoon"* likhein — agar aap better hain`,
-        en: `🏥 *Vardan Hospital - Follow-Up Reminder*\n\nHello ${name}! 🙏\n\nYour medicine course ends tomorrow. Please visit *Dr. ${doctor}* tomorrow for a follow-up or to renew your prescription.\n\n📅 Would you like to book an appointment now?\n👉 Reply *"Yes"* — we'll book it right away\n👉 Reply *"I'm fine"* — if you have recovered`
+        hi: `🏥 *वरदान हॉस्पिटल - फॉलो-अप रिमाइंडर*\n\nनमस्ते ${name} जी! 🙏\n\nआपकी दवाइयाँ कल खत्म हो रही हैं। कृपया कल *${doctor}* से दोबारा मिलें या नई दवा लें।\n\n📅 क्या आप अभी अपॉइंटमेंट बुक करना चाहते हैं?\n👉 *"हाँ"* लिखें — हम तुरंत बुक करेंगे\n👉 *"ठीक हूँ"* लिखें — अगर आप ठीक हैं`,
+        hinglish: `🏥 *Vardan Hospital - Follow-Up Reminder*\n\nNamaste ${name} ji! 🙏\n\nAapki dawaiyan kal khatam ho rahi hain. Kripya kal *${doctor}* se dobara milein ya nai dawa lein.\n\n📅 Kya aap abhi appointment book karna chahte hain?\n👉 *"Haan"* likhein — hum turant book karenge\n👉 *"Theek hoon"* likhein — agar aap better hain`,
+        en: `🏥 *Vardan Hospital - Follow-Up Reminder*\n\nHello ${name}! 🙏\n\nYour medicine course ends tomorrow. Please visit *${doctor}* tomorrow for a follow-up or to renew your prescription.\n\n📅 Would you like to book an appointment now?\n👉 Reply *"Yes"* — we'll book it right away\n👉 Reply *"I'm fine"* — if you have recovered`
       };
 
       const message = templates[lang] || templates.hinglish;
@@ -87,7 +87,7 @@ export async function runSchedulerCheck() {
       const doctorAlert = 
 `⚠️ *Patient Follow-Up Alert*
 
-Dr. ${job.doctor_name}, patient *${job.patient_name}* (Age: ${job.patient_age}, 📞 ${job.patient_phone}) ne kal ka follow-up reminder pakar bhi koi jawab nahi diya.
+${job.doctor_name}, patient *${job.patient_name}* (Age: ${job.patient_age}, 📞 ${job.patient_phone}) ne kal ka follow-up reminder pakar bhi koi jawab nahi diya.
 
 Please check on this patient at the earliest.
 

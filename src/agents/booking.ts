@@ -235,9 +235,9 @@ export async function handleBookingQuery(patientId: string, text: string, lang: 
       };
 
       const cancelConfirmMsgs = {
-        hi: `क्या आप Dr. ${activeAppt.doctor_name} के साथ ${activeAppt.date} (${activeAppt.time_slot}) का अपॉइंटमेंट कैंसिल करना चाहते हैं? कृपया "हाँ" या "नहीं" लिखकर भेजें।`,
-        hinglish: `Kya aap Dr. ${activeAppt.doctor_name} ke sath ${activeAppt.date} (${activeAppt.time_slot}) ka appointment cancel karna chahte hain? Kripya "Haan" ya "Nahi" likhein.`,
-        en: `Do you want to cancel your appointment with Dr. ${activeAppt.doctor_name} on ${activeAppt.date} (${activeAppt.time_slot})? Please reply with "Yes" or "No".`
+        hi: `क्या आप ${activeAppt.doctor_name} के साथ ${activeAppt.date} (${activeAppt.time_slot}) का अपॉइंटमेंट कैंसिल करना चाहते हैं? कृपया "हाँ" या "नहीं" लिखकर भेजें।`,
+        hinglish: `Kya aap ${activeAppt.doctor_name} ke sath ${activeAppt.date} (${activeAppt.time_slot}) ka appointment cancel karna chahte hain? Kripya "Haan" ya "Nahi" likhein.`,
+        en: `Do you want to cancel your appointment with ${activeAppt.doctor_name} on ${activeAppt.date} (${activeAppt.time_slot})? Please reply with "Yes" or "No".`
       };
       await sendTextMessage(patientId, cancelConfirmMsgs[lang]);
       return;
@@ -295,18 +295,56 @@ export async function handleBookingQuery(patientId: string, text: string, lang: 
     const doctors = db.prepare('SELECT * FROM doctors WHERE active = 1').all() as any[];
     let selectedDoc: any = null;
 
-    // Check direct name match
-    const lowerText = text.toLowerCase();
+    // Check direct name match (handles partial matching like "Nitin" or "Ankit" or "Om")
+    const lowerText = text.toLowerCase().replace('dr.', '').trim();
     for (const doc of doctors) {
       const docNameClean = doc.name.toLowerCase().replace('dr.', '').trim();
-      if (lowerText.includes(docNameClean) || lowerText.includes(doc.name.toLowerCase())) {
+      if (docNameClean.includes(lowerText) || lowerText.includes(docNameClean)) {
         selectedDoc = doc;
         break;
       }
     }
 
-    // Symptom mapping if doctor is not specified
-    if (!selectedDoc) {
+    // Advanced LLM symptom/doctor matching
+    if (!selectedDoc && doctors.length > 0) {
+      try {
+        const docListStr = doctors.map(d => `${d.id}: Dr. ${d.name} (${d.department})`).join('\n');
+        const systemPrompt = `You are a medical appointment classification assistant for Vardan Hospital.
+We have the following doctors currently active:
+${docListStr}
+
+Analyze the patient's incoming request: "${text}"
+And match it to the best suited Doctor ID.
+Guidelines:
+- Cardiac issues, chest pain, heartbeat, high BP, heart disease -> Cardiology (Dr. Nitin Singh).
+- Child health, kids, babies, newborn issues, pediatric -> Pediatrics (Dr. Om Shukla).
+- General illnesses (fever, headache, body pain, cough, cold, epilepsy, stomach issues) or any other unspecified ailments -> General Medicine (Dr. Ankit Sharma).
+- If the patient explicitly mentions a doctor's name, match to that doctor.
+
+Format your output as a strict JSON object matching this schema:
+{"doctorId": number | null}`;
+
+        const responseStr = await LLMGateway.getInstance().getChatCompletion('openrouter', {
+          systemPrompt,
+          userPrompt: text,
+          responseFormatJson: true
+        });
+
+        const parsed = JSON.parse(responseStr) as { doctorId: number | null };
+        if (parsed.doctorId) {
+          const matched = doctors.find(d => d.id === parsed.doctorId);
+          if (matched) {
+            selectedDoc = matched;
+            console.log(`[Doctor Matching] Match found by LLM: Dr. ${selectedDoc.name}`);
+          }
+        }
+      } catch (err) {
+        console.error('[Doctor Matching LLM] failed:', err);
+      }
+    }
+
+    // Heuristics mapping fallback if LLM matching fails
+    if (!selectedDoc && doctors.length > 0) {
       if (lowerText.includes('chest') || lowerText.includes('heart') || lowerText.includes('cardiac') || lowerText.includes('dil') || lowerText.includes('bp')) {
         selectedDoc = doctors.find(d => d.department === 'Cardiology');
       } else if (lowerText.includes('bacha') || lowerText.includes('child') || lowerText.includes('kid') || lowerText.includes('baby') || lowerText.includes('pediatric')) {
@@ -338,9 +376,9 @@ export async function handleBookingQuery(patientId: string, text: string, lang: 
       .join(', ');
 
     const datePrompt = {
-      hi: `Dr. ${doctor.name} के लिए दिनांक (तारीख, महीना, वर्ष) बताएं (जैसे: 15 July या कल)।`,
-      hinglish: `Dr. ${doctor.name} ke liye date (tarikh, mahina, saal) batayein (example: 15 July ya kal).`,
-      en: `Please specify the date (date, month, year) for Dr. ${doctor.name} (e.g., July 15 or tomorrow).`
+      hi: `${doctor.name} के लिए दिनांक (तारीख, महीना, वर्ष) बताएं (जैसे: 15 July या कल)।`,
+      hinglish: `${doctor.name} ke liye date (tarikh, mahina, saal) batayein (example: 15 July ya kal).`,
+      en: `Please specify the date (date, month, year) for ${doctor.name} (e.g., July 15 or tomorrow).`
     };
     await sendTextMessage(patientId, datePrompt[lang]);
     return;
@@ -460,13 +498,13 @@ export async function handleBookingQuery(patientId: string, text: string, lang: 
       }).catch(err => console.error('Failed to sync appointment to Google Sheets:', err));
 
       const autoBookedMsg = session.action === 'reschedule' ? {
-        hi: `✅ आपका अपॉइंटमेंट सफलतापूर्वक बदल दिया गया है। अब यह Dr. ${doctorForBook.name} के साथ ${session.date} को ${session.timeSlot} बजे है।`,
-        hinglish: `✅ Aapka appointment successfully change ho gaya hai. Ab yeh Dr. ${doctorForBook.name} ke sath ${session.date} ko ${session.timeSlot} baje hai.`,
-        en: `✅ Your appointment has been successfully rescheduled. It is now with Dr. ${doctorForBook.name} on ${session.date} at ${session.timeSlot}.`
+        hi: `✅ आपका अपॉइंटमेंट सफलतापूर्वक बदल दिया गया है। अब यह ${doctorForBook.name} के साथ ${session.date} को ${session.timeSlot} बजे है।`,
+        hinglish: `✅ Aapka appointment successfully change ho gaya hai. Ab yeh ${doctorForBook.name} ke sath ${session.date} ko ${session.timeSlot} baje hai.`,
+        en: `✅ Your appointment has been successfully rescheduled. It is now with ${doctorForBook.name} on ${session.date} at ${session.timeSlot}.`
       } : {
-        hi: `✅ आपका अपॉइंटमेंट Dr. ${doctorForBook.name} (${doctorForBook.department}) के साथ ${session.date} को ${session.timeSlot} बजे बुक हो गया है! कृपया समय पर अस्पताल पहुंचें।`,
-        hinglish: `✅ Aapka appointment Dr. ${doctorForBook.name} (${doctorForBook.department}) ke sath ${session.date} ko ${session.timeSlot} par book ho gaya hai! Kripya time par hospital pahuchein.`,
-        en: `✅ Your appointment with Dr. ${doctorForBook.name} (${doctorForBook.department}) on ${session.date} at ${session.timeSlot} has been booked! Please arrive on time.`
+        hi: `✅ आपका अपॉइंटमेंट ${doctorForBook.name} (${doctorForBook.department}) के साथ ${session.date} को ${session.timeSlot} बजे बुक हो गया है! कृपया समय पर अस्पताल पहुंचें।`,
+        hinglish: `✅ Aapka appointment ${doctorForBook.name} (${doctorForBook.department}) ke sath ${session.date} ko ${session.timeSlot} par book ho gaya hai! Kripya time par hospital pahuchein.`,
+        en: `✅ Your appointment with ${doctorForBook.name} (${doctorForBook.department}) on ${session.date} at ${session.timeSlot} has been booked! Please arrive on time.`
       };
       await sendTextMessage(patientId, autoBookedMsg[lang]);
     } catch (err: any) {
@@ -531,9 +569,9 @@ export async function handleBookingQuery(patientId: string, text: string, lang: 
           }).catch(err => console.error('Failed to sync appointment row:', err));
 
           const successMsg = {
-            hi: `बधाई हो! Dr. ${doctor.name} (${doctor.department}) के साथ आपका अपॉइंटमेंट ${session.date} को ${session.timeSlot} बजे सफलतापूर्वक बुक हो गया है। कृपया समय पर अस्पताल पहुंचें।`,
-            hinglish: `Mubarak ho! Dr. ${doctor.name} (${doctor.department}) ke sath aapka appointment ${session.date} ko ${session.timeSlot} par successfully book ho gaya hai. Kripya time par hospital pahuchein.`,
-            en: `Congratulations! Your appointment with Dr. ${doctor.name} (${doctor.department}) on ${session.date} at ${session.timeSlot} has been successfully booked. Please arrive on time.`
+            hi: `बधाई हो! ${doctor.name} (${doctor.department}) के साथ आपका अपॉइंटमेंट ${session.date} को ${session.timeSlot} बजे सफलतापूर्वक बुक हो गया है। कृपया समय पर अस्पताल पहुंचें।`,
+            hinglish: `Mubarak ho! ${doctor.name} (${doctor.department}) ke sath aapka appointment ${session.date} ko ${session.timeSlot} par successfully book ho gaya hai. Kripya time par hospital pahuchein.`,
+            en: `Congratulations! Your appointment with ${doctor.name} (${doctor.department}) on ${session.date} at ${session.timeSlot} has been successfully booked. Please arrive on time.`
           };
           await sendTextMessage(patientId, successMsg[lang]);
         } catch (err: any) {
@@ -593,9 +631,9 @@ export async function handleBookingQuery(patientId: string, text: string, lang: 
           }).catch(err => console.error('Failed to sync rescheduled appointment row:', err));
 
           const successReschedule = {
-            hi: `आपका अपॉइंटमेंट सफलतापूर्वक बदल दिया गया है। अब यह Dr. ${doctor.name} के साथ ${session.date} को ${session.timeSlot} बजे है।`,
-            hinglish: `Aapka appointment successfully change ho gaya hai. Ab yeh Dr. ${doctor.name} ke sath ${session.date} ko ${session.timeSlot} baje hai.`,
-            en: `Your appointment has been successfully rescheduled. It is now with Dr. ${doctor.name} on ${session.date} at ${session.timeSlot}.`
+            hi: `आपका अपॉइंटमेंट सफलतापूर्वक बदल दिया गया है। अब यह ${doctor.name} के साथ ${session.date} को ${session.timeSlot} बजे है।`,
+            hinglish: `Aapka appointment successfully change ho gaya hai. Ab yeh ${doctor.name} ke sath ${session.date} ko ${session.timeSlot} baje hai.`,
+            en: `Your appointment has been successfully rescheduled. It is now with ${doctor.name} on ${session.date} at ${session.timeSlot}.`
           };
           await sendTextMessage(patientId, successReschedule[lang]);
         } catch (err: any) {
