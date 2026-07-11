@@ -300,6 +300,7 @@ export function initDb() {
 
   // Deactivate all existing keys first so that only current keys from env will be active
   try {
+    db.exec(`UPDATE llm_keys SET key_val = trim(replace(replace(key_val, char(13), ''), char(10), ''))`);
     db.exec('UPDATE llm_keys SET active = 0');
     console.log('Deactivated older keys in DB for clean refresh');
   } catch (e) {}
@@ -312,11 +313,12 @@ export function initDb() {
     if (csvKeys) {
       const keysList = csvKeys.split(',').map(k => k.trim()).filter(Boolean);
       for (const val of keysList) {
+        const cleanVal = val.trim().replace(/[\r\n]/g, '');
         db.prepare(`
           INSERT INTO llm_keys (provider, key_val)
           VALUES (?, ?)
           ON CONFLICT(key_val) DO UPDATE SET active = 1
-        `).run(prov, val);
+        `).run(prov, cleanVal);
       }
       console.log(`Seeded ${keysList.length} ${prov} keys from comma-separated list`);
     } else {
@@ -325,11 +327,12 @@ export function initDb() {
         const keyName = `${prov.toUpperCase()}_KEY_${i}`;
         const keyVal = process.env[keyName];
         if (keyVal) {
+          const cleanKeyVal = keyVal.trim().replace(/[\r\n]/g, '');
           db.prepare(`
             INSERT INTO llm_keys (provider, key_val)
             VALUES (?, ?)
             ON CONFLICT(key_val) DO UPDATE SET active = 1
-          `).run(prov, keyVal);
+          `).run(prov, cleanKeyVal);
         }
       }
     }

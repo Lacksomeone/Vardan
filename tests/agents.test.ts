@@ -214,34 +214,24 @@ describe('Agent and Router Tests', () => {
         message: { conversation: 'Hello' }
       });
 
-      // 2. Select Language (English -> stage: name)
+      // 2. Select Language (English -> stage: details_input)
       await handleIncomingMessage({
         key: { remoteJid: newPatientId, id: 'msg2' },
         message: { conversation: '2' } // 2 is English
       });
 
-      // 3. Name input (stage: age)
+      // Mock LLM response to parse patient details from free-form text
+      llmMockResponse = JSON.stringify({
+        name: 'Alice Smith',
+        age: 25,
+        gender: 'Female',
+        phone: '917777777777'
+      });
+
+      // 3. Send all details in a single message
       await handleIncomingMessage({
         key: { remoteJid: newPatientId, id: 'msg3' },
-        message: { conversation: 'Alice Smith' }
-      });
-
-      // 4. Age input (stage: gender)
-      await handleIncomingMessage({
-        key: { remoteJid: newPatientId, id: 'msg4' },
-        message: { conversation: '25' }
-      });
-
-      // 5. Gender input (stage: phone)
-      await handleIncomingMessage({
-        key: { remoteJid: newPatientId, id: 'msg5' },
-        message: { conversation: '1' } // 1 is Male, 2 Female, 3 Other (from router.ts options)
-      });
-
-      // 6. Phone number input (registration completes!)
-      await handleIncomingMessage({
-        key: { remoteJid: newPatientId, id: 'msg6' },
-        message: { conversation: '917777777777' }
+        message: { conversation: 'My name is Alice Smith, I am 25 years old, Female, and my phone is 917777777777' }
       });
 
       // Verify patient record exists in database
@@ -250,6 +240,47 @@ describe('Agent and Router Tests', () => {
       assert.strictEqual(patient.name, 'Alice Smith');
       assert.strictEqual(patient.age, 25);
       assert.strictEqual(patient.preferred_language, 'en');
+    });
+
+    it('should allow changing language in middle of chats', async () => {
+      // Setup patient as English preferred first
+      db.prepare("UPDATE patients SET preferred_language = 'en' WHERE id = ?").run(newPatientId);
+
+      // 1. Explicit request to change language
+      await handleIncomingMessage({
+        key: { remoteJid: newPatientId, id: 'lang1' },
+        message: { conversation: 'change language' }
+      });
+
+      // 2. Select Hindi (1)
+      await handleIncomingMessage({
+        key: { remoteJid: newPatientId, id: 'lang2' },
+        message: { conversation: '1' }
+      });
+
+      // Verify language is now Hindi (hi)
+      let patient = db.prepare('SELECT * FROM patients WHERE id = ?').get(newPatientId) as any;
+      assert.strictEqual(patient.preferred_language, 'hi');
+
+      // 3. Direct language switch to English
+      await handleIncomingMessage({
+        key: { remoteJid: newPatientId, id: 'lang3' },
+        message: { conversation: 'english please' }
+      });
+
+      // Verify language is now English (en)
+      patient = db.prepare('SELECT * FROM patients WHERE id = ?').get(newPatientId) as any;
+      assert.strictEqual(patient.preferred_language, 'en');
+
+      // 4. Direct language switch to Hinglish
+      await handleIncomingMessage({
+        key: { remoteJid: newPatientId, id: 'lang4' },
+        message: { conversation: 'Hinglish' }
+      });
+
+      // Verify language is now Hinglish
+      patient = db.prepare('SELECT * FROM patients WHERE id = ?').get(newPatientId) as any;
+      assert.strictEqual(patient.preferred_language, 'hinglish');
     });
   });
 

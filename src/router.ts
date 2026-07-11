@@ -9,7 +9,7 @@ import { syncPatientToGoogleSheet, syncAppointmentToGoogleSheet } from './sheets
 
 // In-memory registration session map
 interface RegSession {
-  stage: 'lang_select' | 'name' | 'age' | 'gender' | 'phone';
+  stage: 'lang_select' | 'details_input';
   name?: string;
   age?: number;
   gender?: string;
@@ -25,6 +25,52 @@ export function clearRegSession(patientId: string) {
     return true;
   }
   return false;
+}
+
+const langChangeSessions = new Set<string>();
+
+function isLanguageChangeRequest(text: string): boolean {
+  const lower = text.toLowerCase().trim();
+  const keywords = [
+    'change language', 'switch language', 'choose language', 'select language', 'language change',
+    'bhasha badlo', 'bhasha badlein', 'language badlo', 'language change karo', 'bhasha change',
+    'change bhasha', 'change language please', 'language settings', 'bhasha setting'
+  ];
+  return keywords.some(k => lower.includes(k));
+}
+
+function getDirectLanguageSwitch(text: string): 'hi' | 'en' | 'hinglish' | null {
+  const lower = text.toLowerCase().trim();
+  
+  // Hindi triggers
+  if (
+    lower === 'hindi' || lower === 'हिंदी' || 
+    lower.includes('hindi me baat') || lower.includes('hindi please') || 
+    lower.includes('hindi bhasha') || lower.includes('talk in hindi') ||
+    lower.includes('use hindi')
+  ) {
+    return 'hi';
+  }
+  
+  // English triggers
+  if (
+    lower === 'english' || 
+    lower.includes('english me baat') || lower.includes('english please') || 
+    lower.includes('talk in english') || lower.includes('use english')
+  ) {
+    return 'en';
+  }
+  
+  // Hinglish triggers
+  if (
+    lower === 'hinglish' || 
+    lower.includes('hinglish me baat') || lower.includes('hinglish please') || 
+    lower.includes('talk in hinglish') || lower.includes('use hinglish')
+  ) {
+    return 'hinglish';
+  }
+  
+  return null;
 }
 
 function isHindiScript(text: string): boolean {
@@ -327,26 +373,89 @@ JSON Schema:
     return;
   }
 
-  // 2.5 Bypass Orchestrator if there is an active booking session
-  if (hasActiveBookingSession(patientId)) {
-    // Log incoming message to conversations
-    const loggedMessage = isVoice ? `🎤 [Voice Note]: ${text}` : text;
-    db.prepare(`
-      INSERT INTO conversations (patient_id, role, message, agent_used, language)
-      VALUES (?, ?, ?, ?, ?)
-    `).run(patientId, 'patient', loggedMessage, 'booking', patient.preferred_language);
+  // 2.1 Handle Explicit/Direct Language Switch Requests
+  const cleanInput = text.trim();
+  if (langChangeSessions.has(patientId)) {
+    let newLang: 'hi' | 'en' | 'hinglish' | null = null;
+    if (cleanInput === '1') newLang = 'hi';
+    else if (cleanInput === '2') newLang = 'en';
+    else if (cleanInput === '3') newLang = 'hinglish';
+    else {
+      newLang = getDirectLanguageSwitch(text);
+    }
+    
+    if (newLang) {
+      try {
+        db.prepare('UPDATE patients SET preferred_language = ? WHERE id = ?').run(newLang, patientId);
+        patient.preferred_language = newLang;
+        langChangeSessions.delete(patientId);
+        
+        const confirmMsgs = {
+          hi: '🏥 भाषा को सफलतापूर्वक *हिंदी* में बदल दिया गया है। मैं अब आपसे हिंदी में बात करूँगा। आप अपनी समस्या बता सकते हैं।',
+          en: '🏥 Language has been successfully switched to *English*. I will now communicate with you in English. Please tell me how I can help you.',
+          hinglish: '🏥 Language successfully *Hinglish* me change ho gayi hai. Ab se main aapki hinglish me help karunga. Aap apni problem bata sakte hain.'
+        };
+        await sendTextMessage(patientId, confirmMsgs[newLang]);
+        
+        db.prepare(`
+          INSERT INTO conversations (patient_id, role, message, agent_used, language)
+          VALUES (?, 'bot', ?, 'router', ?)
+        `).run(patientId, confirmMsgs[newLang], newLang);
+        return;
+      } catch (err) {
+        console.error('Failed to update language from session:', err);
+      }
+    } else {
+      langChangeSessions.delete(patientId);
+    }
+  }
 
-    await handleBookingQuery(patientId, text, patient.preferred_language);
+  if (isLanguageChangeRequest(text)) {
+    langChangeSessions.add(patientId);
+    const langMenu = 
+`🏥 *Vardan Hospital, Bahraich*
+
+Please choose your language / भाषा चुनें:
+1️⃣  हिंदी (Hindi)
+2️⃣  English
+3️⃣  Hinglish (Roman Hindi)
+
+Reply with 1, 2, or 3`;
+    await sendTextMessage(patientId, langMenu);
     return;
+  }
+
+  const directLang = getDirectLanguageSwitch(text);
+  if (directLang) {
+    try {
+      db.prepare('UPDATE patients SET preferred_language = ? WHERE id = ?').run(directLang, patientId);
+      patient.preferred_language = directLang;
+      
+      const confirmMsgs = {
+        hi: '🏥 भाषा को सफलतापूर्वक *हिंदी* में बदल दिया गया है। मैं अब आपसे हिंदी में बात करूँगा। आप अपनी समस्या बता सकते हैं।',
+        en: '🏥 Language has been successfully switched to *English*. I will now communicate with you in English. Please tell me how I can help you.',
+        hinglish: '🏥 Language successfully *Hinglish* me change ho gayi hai. Ab se main aapki hinglish me help karunga. Aap apni problem bata sakte hain.'
+      };
+      await sendTextMessage(patientId, confirmMsgs[directLang]);
+      
+      db.prepare(`
+        INSERT INTO conversations (patient_id, role, message, agent_used, language)
+        VALUES (?, 'bot', ?, 'router', ?)
+      `).run(patientId, confirmMsgs[directLang], directLang);
+      return;
+    } catch (err) {
+      console.error('Failed to update direct language:', err);
+    }
   }
 
   // 3. Registered patient routing
   // Insert incoming message into conversations table
   const loggedMessage = isVoice ? `🎤 [Voice Note]: ${text}` : text;
+  const agentUsedForLog = hasActiveBookingSession(patientId) ? 'booking' : 'router';
   db.prepare(`
     INSERT INTO conversations (patient_id, role, message, agent_used, language)
     VALUES (?, ?, ?, ?, ?)
-  `).run(patientId, 'patient', loggedMessage, 'router', patient.preferred_language);
+  `).run(patientId, 'patient', loggedMessage, agentUsedForLog, patient.preferred_language);
 
   // Call LLM Router for intent classification and language check
   const llmGateway = LLMGateway.getInstance();
@@ -403,6 +512,12 @@ JSON Schema:
     }
   }
 
+  // Bypass Orchestrator intent routing if there is an active booking session
+  if (hasActiveBookingSession(patientId)) {
+    await handleBookingQuery(patientId, text, patient.preferred_language);
+    return;
+  }
+
   // Route to the selected agent with isolated try-catch
   try {
     switch (classifiedIntent) {
@@ -433,6 +548,7 @@ JSON Schema:
 }
 
 
+// Registration state machine
 // Registration state machine
 async function handleRegistration(patientId: string, phone: string, text: string) {
   let session = regSessions[patientId];
@@ -474,12 +590,12 @@ Reply with 1, 2, or 3`;
     }
     
     session.lang = selectedLang;
-    session.stage = 'name';
+    session.stage = 'details_input';
     
     const welcomeMsgs = {
-      hi: '✅ बढ़िया! आप हमारे नए मरीज लग रहे हैं।\n\nरजिस्ट्रेशन के लिए कृपया अपना *पूरा नाम* लिखकर भेजें।',
-      hinglish: '✅ Great! Aap hamare naye patient lag rahe hain.\n\nRegistration ke liye kripya apna *full name* likhkar bhejein.',
-      en: '✅ Great! You appear to be a new patient.\n\nPlease reply with your *full name* to start registration.'
+      hi: '✅ बढ़िया! आप हमारे नए मरीज लग रहे हैं।\n\nरजिस्ट्रेशन पूरा करने के लिए कृपया अपनी निम्नलिखित जानकारी एक ही मेसेज में भेजें:\n- *पूरा नाम* (Full Name)\n- *उम्र* (Age)\n- *लिंग* (Gender)\n- *फ़ोन नंबर* (Phone Number - वैकल्पिक)\n\n(उदाहरण: Nitin Kumar, 25, Male, 9876543210)',
+      hinglish: '✅ Great! Aap hamare naye patient lag rahe hain.\n\nRegistration complete karne ke liye kripya apni details ek hi message me send karein:\n- *Full Name* (पूरा नाम)\n- *Age* (उम्र)\n- *Gender* (लिंग)\n- *Phone Number* (फ़ोन नंबर - Optional)\n\n(e.g., Nitin Kumar, 25, Male, 9876543210)',
+      en: '✅ Great! You appear to be a new patient.\n\nTo complete registration, please reply with your details in a single message:\n- *Full Name*\n- *Age*\n- *Gender*\n- *Phone Number* (Optional)\n\n(e.g., Alice Smith, 25, Female, 9876543210)'
     };
     await sendTextMessage(patientId, welcomeMsgs[selectedLang]);
     return;
@@ -487,64 +603,67 @@ Reply with 1, 2, or 3`;
 
   const lang = session.lang;
 
-  if (session.stage === 'name') {
-    session.name = text.trim();
-    session.stage = 'age';
+  if (session.stage === 'details_input') {
+    const llmGateway = LLMGateway.getInstance();
+    const systemPrompt = `You are a medical registration assistant at Vardan Hospital.
+Extract the patient's registration details from their message.
+Analyze the message and extract:
+1. "name": The full name of the patient.
+2. "age": The age of the patient as a integer number.
+3. "gender": The gender of the patient (must be "Male", "Female", or "Other").
+4. "phone": The contact phone number of the patient (digits only).
 
-    const ageMsgs = {
-      hi: 'धन्यवाद। अब कृपया अपनी उम्र (Age) लिखकर भेजें (उदाहरण: 25)।',
-      hinglish: 'Thank you. Ab kripya apni age (umra) likhkar bhejein (e.g. 25).',
-      en: 'Thank you. Now please reply with your age (e.g. 25).'
-    };
+If any detail is not mentioned or cannot be inferred, set it to null.
+Format the output strictly as a JSON object. Do not include markdown wraps.
 
-    await sendTextMessage(patientId, ageMsgs[lang]);
-    return;
-  }
+JSON Schema:
+{
+  "name": string | null,
+  "age": number | null,
+  "gender": "Male" | "Female" | "Other" | null,
+  "phone": string | null
+}`;
 
-  if (session.stage === 'age') {
-    const age = parseInt(text.trim(), 10);
-    if (isNaN(age) || age <= 0 || age > 120) {
-      const invalidAgeMsgs = {
-        hi: 'कृपया एक सही उम्र (संख्या में) लिखकर भेजें।',
-        hinglish: 'Kripya ek sahi age (numbers me) likhkar bhejein.',
-        en: 'Please enter a valid age (as a number).'
+    let parsed: {
+      name: string | null;
+      age: number | null;
+      gender: 'Male' | 'Female' | 'Other' | null;
+      phone: string | null;
+    } = { name: null, age: null, gender: null, phone: null };
+
+    try {
+      const parsedStr = await llmGateway.getChatCompletion('groq', {
+        systemPrompt,
+        userPrompt: text
+      });
+
+      let cleaned = parsedStr.trim();
+      if (cleaned.startsWith('```json')) {
+        cleaned = cleaned.replace(/^```json/, '').replace(/```$/, '').trim();
+      } else if (cleaned.startsWith('```')) {
+        cleaned = cleaned.replace(/^```/, '').replace(/```$/, '').trim();
+      }
+      parsed = JSON.parse(cleaned);
+    } catch (err) {
+      console.error('[Registration LLM Parse] Failed:', err);
+    }
+
+    const finalName = parsed.name ? parsed.name.trim() : null;
+    const finalAge = parsed.age ? Number(parsed.age) : null;
+    const finalGender = parsed.gender || 'Other';
+    const finalPhone = parsed.phone ? parsed.phone.replace(/\D/g, '') : phone;
+
+    if (!finalName || !finalAge || isNaN(finalAge) || finalAge <= 0 || finalAge > 120) {
+      const invalidMsgs = {
+        hi: '❌ कृपया अपना विवरण सही प्रारूप में भेजें।\nसुनिश्चित करें कि नाम और उम्र (संख्या में) स्पष्ट रूप से लिखे हों।\n(जैसे: Nitin Kumar, 25, Male)',
+        hinglish: '❌ Kripya apna details sahi format me send karein.\nMake sure name aur age (numbers me) clear likha ho.\n(e.g. Nitin Kumar, 25, Male)',
+        en: '❌ Please provide your details in a valid format.\nMake sure your name and age (as a number) are clearly specified.\n(e.g. Alice Smith, 25, Female)'
       };
-      await sendTextMessage(patientId, invalidAgeMsgs[lang]);
+      await sendTextMessage(patientId, invalidMsgs[lang]);
       return;
     }
 
-    session.age = age;
-    session.stage = 'gender';
-
-    const genderMsgs = {
-      hi: 'धन्यवाद। अब कृपया अपना लिंग (Gender) लिखकर भेजें: पुरुष (Male), महिला (Female), या अन्य (Other)।',
-      hinglish: 'Thank you. Ab kripya apna gender likhkar bhejein: Male, Female, ya Other.',
-      en: 'Thank you. Now please enter your gender: Male, Female, or Other.'
-    };
-
-    await sendTextMessage(patientId, genderMsgs[lang]);
-    return;
-  }
-
-  if (session.stage === 'gender') {
-    const gender = text.trim();
-    session.gender = gender;
-    session.stage = 'phone';
-
-    const phoneMsgs = {
-      hi: 'धन्यवाद। अब कृपया अपना संपर्क फ़ोन नंबर (Phone Number) लिखकर भेजें (उदाहरण: 9876543210)।',
-      hinglish: 'Thank you. Ab kripya apna contact phone number likhkar bhejein (e.g. 9876543210).',
-      en: 'Thank you. Now please reply with your contact phone number (e.g., 9876543210).'
-    };
-
-    await sendTextMessage(patientId, phoneMsgs[lang]);
-    return;
-  }
-
-  if (session.stage === 'phone') {
-    const inputPhone = text.trim().replace(/\D/g, ''); // Extract digits only
-
-    if (inputPhone.length < 10 || inputPhone.length > 15) {
+    if (finalPhone.length < 10 || finalPhone.length > 15) {
       const invalidPhoneMsgs = {
         hi: 'कृपया एक सही 10-अंकों का फ़ोन नंबर लिखकर भेजें (जैसे: 9876543210)।',
         hinglish: 'Kripya ek sahi 10-digit phone number likhkar bhejein (e.g. 9876543210).',
@@ -555,7 +674,7 @@ Reply with 1, 2, or 3`;
     }
 
     // Check if phone number already exists
-    const exists = db.prepare('SELECT id FROM patients WHERE phone = ?').get(inputPhone);
+    const exists = db.prepare('SELECT id FROM patients WHERE phone = ?').get(finalPhone);
     if (exists) {
       const existsMsgs = {
         hi: 'यह फ़ोन नंबर पहले से ही किसी अन्य मरीज के साथ रजिस्टर्ड है। कृपया दूसरा नंबर लिखकर भेजें।',
@@ -570,14 +689,14 @@ Reply with 1, 2, or 3`;
     db.prepare(`
       INSERT INTO patients (id, name, phone, age, gender, preferred_language)
       VALUES (?, ?, ?, ?, ?, ?)
-    `).run(patientId, session.name, inputPhone, session.age, session.gender, lang);
+    `).run(patientId, finalName, finalPhone, finalAge, finalGender, lang);
 
     // Sync to Google Spreadsheet
     syncPatientToGoogleSheet({
-      name: session.name!,
-      phone: inputPhone,
-      age: session.age!,
-      gender: session.gender!,
+      name: finalName,
+      phone: finalPhone,
+      age: finalAge,
+      gender: finalGender,
       lang
     }).catch(err => console.error('Failed to sync to Google Sheets:', err));
 
