@@ -8,8 +8,12 @@ import { connectToWhatsApp } from './whatsapp.js';
 import { startScheduler } from './scheduler.js';
 import { autoResolvePendingQueries } from './agents/faq.js';
 import dashboardRouter from './routes/dashboard.js';
+import { initializeMonitor } from './monitor.js';
 
 dotenv.config();
+
+// Initialize global crash monitor & WhatsApp alerting
+initializeMonitor();
 
 // 1. Initialize SQLite Database & Seeding
 initDb();
