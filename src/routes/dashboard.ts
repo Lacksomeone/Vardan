@@ -13,14 +13,19 @@ import { clearRegSession } from '../router.js';
 const router = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'vardan_secret_key_super_secure_9876';
 
-// ─── Image Upload Endpoint (Base64) ──────────────────────────────────────────
+// ─── Image/Document Upload Endpoint (Base64) ────────────────────────────────
 router.post('/upload', (req: any, res, next) => {
-  // Call authMiddleware internally to protect the route
   authMiddleware(req, res, next);
 }, (req: any, res) => {
-  const { filename, base64Data } = req.body;
+  const { filename, base64Data, category } = req.body;
   if (!filename || !base64Data) {
     return res.status(400).json({ error: 'Filename and base64Data are required' });
+  }
+
+  const allowedExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.pdf', '.doc', '.docx'];
+  const ext = (path.extname(filename) || '.jpg').toLowerCase();
+  if (!allowedExtensions.includes(ext)) {
+    return res.status(400).json({ error: `File type not allowed. Allowed: ${allowedExtensions.join(', ')}` });
   }
 
   try {
@@ -29,10 +34,10 @@ router.post('/upload', (req: any, res, next) => {
       fs.mkdirSync(uploadsDir, { recursive: true });
     }
 
-    const base64Content = base64Data.replace(/^data:image\/\w+;base64,/, "");
+    // Strip data URI prefix (handles both image/* and application/*)
+    const base64Content = base64Data.replace(/^data:[^;]+;base64,/, '');
     const buffer = Buffer.from(base64Content, 'base64');
 
-    const ext = path.extname(filename) || '.jpg';
     const baseName = path.basename(filename, ext).replace(/[^a-zA-Z0-9]/g, '_');
     const uniqueFilename = `${baseName}_${Date.now()}${ext}`;
     const filePath = path.join(uploadsDir, uniqueFilename);
@@ -40,7 +45,7 @@ router.post('/upload', (req: any, res, next) => {
     fs.writeFileSync(filePath, buffer);
 
     const fileUrl = `/uploads/${uniqueFilename}`;
-    return res.json({ url: fileUrl });
+    return res.json({ url: fileUrl, category: category || 'photo', filename: uniqueFilename });
   } catch (err: any) {
     console.error('File upload failed:', err);
     return res.status(500).json({ error: 'Failed to upload file: ' + err.message });
@@ -110,6 +115,158 @@ router.post('/doctors', authMiddleware, (req: any, res) => {
   }
 });
 
+// ─── Bulk Doctor Import (up to 50 at once) ───────────────────────────────────
+router.post('/doctors/bulk', authMiddleware, (req: any, res) => {
+  if (req.user.role !== 'owner') return res.status(403).json({ error: 'Only Owner can bulk import doctors' });
+
+  const { doctors } = req.body;
+  if (!Array.isArray(doctors) || doctors.length === 0) {
+    return res.status(400).json({ error: 'doctors must be a non-empty array' });
+  }
+  if (doctors.length > 50) {
+    return res.status(400).json({ error: 'Maximum 50 doctors can be imported at once' });
+  }
+
+  const results: { index: number; name: string; status: 'success' | 'error'; id?: number; error?: string }[] = [];
+  const stmt = db.prepare(`
+    INSERT INTO doctors (name, department, phone, weekly_schedule_json, fee, details, photo_url, services)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+
+  for (let i = 0; i < doctors.length; i++) {
+    const doc = doctors[i];
+    if (!doc.name || !doc.department || !doc.phone || !doc.weekly_schedule_json || !doc.fee) {
+      results.push({ index: i, name: doc.name || `Row ${i + 1}`, status: 'error', error: 'Missing required fields (name, department, phone, fee)' });
+      continue;
+    }
+    try {
+      const info = stmt.run(
+        doc.name.trim(),
+        doc.department.trim(),
+        doc.phone.trim(),
+        typeof doc.weekly_schedule_json === 'string' ? doc.weekly_schedule_json : JSON.stringify(doc.weekly_schedule_json),
+        Number(doc.fee),
+        doc.details || null,
+        doc.photo_url || null,
+        doc.services || null
+      );
+      results.push({ index: i, name: doc.name, status: 'success', id: Number(info.lastInsertRowid) });
+    } catch (err: any) {
+      results.push({ index: i, name: doc.name, status: 'error', error: err.message });
+    }
+  }
+
+  const successCount = results.filter(r => r.status === 'success').length;
+  const errorCount = results.filter(r => r.status === 'error').length;
+  return res.status(207).json({ successCount, errorCount, results });
+});
+
+// ─── Parse Doctor Document (PDF, Image, Text) using Gemini ───────────────────
+router.post('/doctors/parse-document', authMiddleware, async (req: any, res) => {
+  if (req.user.role !== 'owner') return res.status(403).json({ error: 'Only Owner can parse documents' });
+
+  const { filename, base64Data } = req.body;
+  if (!filename || !base64Data) {
+    return res.status(400).json({ error: 'Filename and base64Data are required' });
+  }
+
+  const ext = path.extname(filename).toLowerCase();
+  let mimeType = '';
+  if (ext === '.pdf') {
+    mimeType = 'application/pdf';
+  } else if (ext === '.jpg' || ext === '.jpeg') {
+    mimeType = 'image/jpeg';
+  } else if (ext === '.png') {
+    mimeType = 'image/png';
+  } else if (ext === '.webp') {
+    mimeType = 'image/webp';
+  } else if (ext === '.txt') {
+    mimeType = 'text/plain';
+  } else {
+    return res.status(400).json({ error: 'File type not supported for AI extraction. Allowed: PDF, TXT, JPG, JPEG, PNG, WEBP.' });
+  }
+
+  const DEPARTMENTS = [
+    'General Medicine', 'Cardiology', 'Pediatrics', 'Orthopedics', 'Gynecology',
+    'Neurology', 'Dermatology', 'ENT', 'Ophthalmology', 'Psychiatry',
+    'Pulmonology', 'Gastroenterology', 'Urology', 'Oncology', 'Radiology', 'Anesthesiology'
+  ];
+
+  const systemPrompt = `You are an expert medical administration assistant. Your job is to analyze the provided document (which may be a PDF, an image, or a text file containing doctor credentials, cards, schedules, or CVs) and extract the doctor's details into a strict JSON format.
+
+Available Departments:
+${JSON.stringify(DEPARTMENTS)}
+
+Strict Output JSON Schema:
+{
+  "name": "Full Name of the Doctor (with Dr. prefix if appropriate)",
+  "department": "One of the available departments list. Choose the closest matching department.",
+  "phone": "Phone number with country code, e.g. +91XXXXXXXXXX. If country code is missing and it is a 10 digit Indian number, prefix it with +91.",
+  "fee": 300, // Consultation fee as a number. Default to 300 if not specified.
+  "services": "Comma-separated list of services or treatments offered (e.g. ECG, Echo, General OPD). Max 100 characters.",
+  "details": "A brief professional biography or specialization description (e.g., Cardiologist with 10+ years experience). Max 200 characters.",
+  "weekly_schedule_json": {
+    "Monday": ["09:00-13:00", "15:00-18:00"],
+    "Tuesday": ["09:00-13:00", "15:00-18:00"],
+    "Wednesday": ["09:00-13:00", "15:00-18:00"],
+    "Thursday": ["09:00-13:00", "15:00-18:00"],
+    "Friday": ["09:00-13:00", "15:00-18:00"],
+    "Saturday": ["09:00-13:00", "15:00-18:00"]
+  } // A weekly schedule mapping days of the week (Monday to Saturday) to arrays of time slots (e.g., ["09:00-13:00", "15:00-18:00"]). If weekly schedule is not found, default to a standard schedule of Monday to Saturday, 09:00-13:00 and 15:00-18:00.
+}
+
+Ensure the output is ONLY a valid JSON object. Do not include markdown blocks like \`\`\`json or any other text.`;
+
+  const userPrompt = `Please analyze this document and extract the doctor's details matching the strict schema.`;
+
+  try {
+    const rawResult = await LLMGateway.getInstance().analyzeDocument(
+      base64Data,
+      mimeType,
+      systemPrompt,
+      userPrompt
+    );
+
+    // Clean JSON response (just in case LLM added markdown headers, though we specified responseMimeType: 'application/json')
+    let cleaned = rawResult.trim();
+    if (cleaned.startsWith('```json')) {
+      cleaned = cleaned.replace(/^```json/, '').replace(/```$/, '').trim();
+    } else if (cleaned.startsWith('```')) {
+      cleaned = cleaned.replace(/^```/, '').replace(/```$/, '').trim();
+    }
+
+    const parsed = JSON.parse(cleaned);
+
+    // Validate and fallback for department
+    if (!parsed.department || !DEPARTMENTS.includes(parsed.department)) {
+      const dept = DEPARTMENTS.find(d => d.toLowerCase() === (parsed.department || '').toLowerCase()) || 'General Medicine';
+      parsed.department = dept;
+    }
+
+    // Default fee if invalid
+    if (!parsed.fee || isNaN(Number(parsed.fee))) {
+      parsed.fee = 300;
+    }
+
+    // Default weekly schedule if invalid/missing
+    if (!parsed.weekly_schedule_json || typeof parsed.weekly_schedule_json !== 'object') {
+      parsed.weekly_schedule_json = {
+        Monday: ['09:00-13:00', '15:00-18:00'],
+        Tuesday: ['09:00-13:00', '15:00-18:00'],
+        Wednesday: ['09:00-13:00', '15:00-18:00'],
+        Thursday: ['09:00-13:00', '15:00-18:00'],
+        Friday: ['09:00-13:00', '15:00-18:00'],
+        Saturday: ['09:00-13:00', '15:00-18:00']
+      };
+    }
+
+    return res.json(parsed);
+  } catch (err: any) {
+    console.error('Failed to parse doctor document:', err);
+    return res.status(500).json({ error: 'Failed to extract doctor details: ' + err.message });
+  }
+});
+
 router.put('/doctors/:id', authMiddleware, (req: any, res) => {
   if (req.user.role !== 'owner') return res.status(403).json({ error: 'Only Owner can modify doctors' });
 
@@ -137,6 +294,68 @@ router.delete('/doctors/:id', authMiddleware, (req: any, res) => {
     // Soft delete / deactivate
     db.prepare('UPDATE doctors SET active = 0 WHERE id = ?').run(id);
     return res.json({ message: 'Doctor deactivated successfully' });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── Doctor Document Management ───────────────────────────────────────────────
+router.get('/doctors/:id/documents', authMiddleware, (req, res) => {
+  const { id } = req.params;
+  try {
+    const docs = db.prepare('SELECT * FROM doctor_documents WHERE doctor_id = ? ORDER BY uploaded_at DESC').all(Number(id));
+    return res.json(docs);
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/doctors/:id/documents', authMiddleware, (req: any, res) => {
+  if (req.user.role !== 'owner') return res.status(403).json({ error: 'Only Owner can upload documents' });
+  const { id } = req.params;
+  const { category, filename, file_url } = req.body;
+
+  const validCategories = ['photo', 'certificate', 'license', 'document'];
+  if (!category || !validCategories.includes(category)) {
+    return res.status(400).json({ error: `Invalid category. Must be one of: ${validCategories.join(', ')}` });
+  }
+  if (!filename || !file_url) {
+    return res.status(400).json({ error: 'filename and file_url are required' });
+  }
+
+  // Verify doctor exists
+  const doctor = db.prepare('SELECT id FROM doctors WHERE id = ?').get(Number(id));
+  if (!doctor) return res.status(404).json({ error: 'Doctor not found' });
+
+  try {
+    const info = db.prepare(`
+      INSERT INTO doctor_documents (doctor_id, category, filename, file_url)
+      VALUES (?, ?, ?, ?)
+    `).run(Number(id), category, filename, file_url);
+    return res.status(201).json({ id: info.lastInsertRowid, doctor_id: Number(id), category, filename, file_url });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+router.delete('/doctors/:doctorId/documents/:docId', authMiddleware, (req: any, res) => {
+  if (req.user.role !== 'owner') return res.status(403).json({ error: 'Only Owner can delete documents' });
+  const { doctorId, docId } = req.params;
+  try {
+    // Get the file URL before deleting to optionally remove from disk
+    const doc = db.prepare('SELECT * FROM doctor_documents WHERE id = ? AND doctor_id = ?').get(Number(docId), Number(doctorId)) as any;
+    if (!doc) return res.status(404).json({ error: 'Document not found' });
+
+    db.prepare('DELETE FROM doctor_documents WHERE id = ? AND doctor_id = ?').run(Number(docId), Number(doctorId));
+
+    // Attempt to delete the physical file from disk
+    if (doc.file_url && doc.file_url.startsWith('/uploads/')) {
+      const filePath = path.resolve(doc.file_url.slice(1));
+      if (fs.existsSync(filePath)) {
+        try { fs.unlinkSync(filePath); } catch (_) {}
+      }
+    }
+    return res.json({ message: 'Document deleted successfully' });
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
   }

@@ -240,7 +240,7 @@ export class LLMGateway {
 
       } else if (provider === 'gemini') {
         const response = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
+          `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=${apiKey}`,
           {
 
             method: 'POST',
@@ -312,6 +312,88 @@ export class LLMGateway {
         throw new Error('LLM call was aborted');
       }
       throw error;
+    }
+  }
+
+  // Analyze a document (PDF, Image, Text) using Gemini 1.5 Flash
+  public async analyzeDocument(
+    base64Data: string,
+    mimeType: string,
+    systemPrompt: string,
+    userPrompt: string
+  ): Promise<string> {
+    this.reloadKeys();
+    const geminiKeys = this.keys.filter(
+      (k) => k.provider === 'gemini' && k.active === 1 && k.cooldown_until < Date.now()
+    );
+    if (geminiKeys.length === 0) {
+      throw new Error('No active Gemini API keys are available (all might be in cooldown).');
+    }
+    // Sort by usage count
+    geminiKeys.sort((a, b) => a.usage_count - b.usage_count);
+    const keyRecord = geminiKeys[0];
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 20000); // 20s timeout for document analysis
+
+    const start = Date.now();
+    try {
+      // Strip any data URI prefix if present
+      const cleanBase64 = base64Data.replace(/^data:[^;]+;base64,/, '');
+
+      const response = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=${keyRecord.key_val}`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            contents: [
+              {
+                role: 'user',
+                parts: [
+                  {
+                    inlineData: {
+                      mimeType: mimeType,
+                      data: cleanBase64
+                    }
+                  },
+                  {
+                    text: userPrompt
+                  }
+                ]
+              }
+            ],
+            systemInstruction: {
+              parts: [{ text: systemPrompt }]
+            },
+            generationConfig: {
+              responseMimeType: 'application/json',
+              temperature: 0.1
+            }
+          }),
+          signal: controller.signal
+        }
+      );
+
+      clearTimeout(timeoutId);
+      if (!response.ok) {
+        const errText = await response.text();
+        throw new Error(`Gemini HTTP ${response.status}: ${errText}`);
+      }
+
+      const data = await response.json() as any;
+      const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+
+      this.incrementUsage(keyRecord.id);
+      this.logCall(keyRecord.provider, keyRecord.id, Date.now() - start, true);
+      return text;
+    } catch (err: any) {
+      clearTimeout(timeoutId);
+      this.setCooldown(keyRecord.id, 60000);
+      this.logCall(keyRecord.provider, keyRecord.id, Date.now() - start, false, err.message || String(err));
+      throw err;
     }
   }
 }

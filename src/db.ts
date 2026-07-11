@@ -58,6 +58,24 @@ export function initDb() {
     db.exec('ALTER TABLE doctors ADD COLUMN services TEXT;');
   } catch (e) {}
 
+  // Doctor documents table for categorized file uploads
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS doctor_documents (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      doctor_id INTEGER NOT NULL,
+      category TEXT NOT NULL,
+      filename TEXT NOT NULL,
+      file_url TEXT NOT NULL,
+      uploaded_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (doctor_id) REFERENCES doctors(id)
+    );
+  `);
+
+  // Index for fast doctor document lookups
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_doctor_documents_doctor ON doctor_documents(doctor_id);
+  `);
+
   db.exec(`
     CREATE TABLE IF NOT EXISTS appointments (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
