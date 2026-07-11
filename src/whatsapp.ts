@@ -169,7 +169,10 @@ export async function sendTextMessage(toJid: string, text: string) {
   if (!sock || connectionStatus !== 'connected') {
     throw new Error('WhatsApp not connected');
   }
-  const jid = toJid.includes('@') ? toJid : `${toJid}@s.whatsapp.net`;
+  let jid = toJid.includes('@') ? toJid : `${toJid}@s.whatsapp.net`;
+  if (jid.startsWith('+')) {
+    jid = jid.substring(1);
+  }
   await sock.sendMessage(jid, { text });
 
   // Log outgoing message to conversations table if recipient is a patient
