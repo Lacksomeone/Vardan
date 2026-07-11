@@ -9,10 +9,11 @@ import { syncPatientToGoogleSheet } from './sheets.js';
 
 // In-memory registration session map
 interface RegSession {
-  stage: 'lang_select' | 'name' | 'age' | 'gender';
+  stage: 'lang_select' | 'name' | 'age' | 'gender' | 'phone';
   name?: string;
   age?: number;
   gender?: string;
+  phone?: string;
   lang: 'hi' | 'en' | 'hinglish';
 }
 
@@ -325,19 +326,56 @@ Reply with 1, 2, or 3`;
 
   if (session.stage === 'gender') {
     const gender = text.trim();
-    
+    session.gender = gender;
+    session.stage = 'phone';
+
+    const phoneMsgs = {
+      hi: 'धन्यवाद। अब कृपया अपना संपर्क फ़ोन नंबर (Phone Number) लिखकर भेजें (उदाहरण: 9876543210)।',
+      hinglish: 'Thank you. Ab kripya apna contact phone number likhkar bhejein (e.g. 9876543210).',
+      en: 'Thank you. Now please reply with your contact phone number (e.g., 9876543210).'
+    };
+
+    await sendTextMessage(patientId, phoneMsgs[lang]);
+    return;
+  }
+
+  if (session.stage === 'phone') {
+    const inputPhone = text.trim().replace(/\D/g, ''); // Extract digits only
+
+    if (inputPhone.length < 10 || inputPhone.length > 15) {
+      const invalidPhoneMsgs = {
+        hi: 'कृपया एक सही 10-अंकों का फ़ोन नंबर लिखकर भेजें (जैसे: 9876543210)।',
+        hinglish: 'Kripya ek sahi 10-digit phone number likhkar bhejein (e.g. 9876543210).',
+        en: 'Please enter a valid 10-digit phone number (e.g., 9876543210).'
+      };
+      await sendTextMessage(patientId, invalidPhoneMsgs[lang]);
+      return;
+    }
+
+    // Check if phone number already exists
+    const exists = db.prepare('SELECT id FROM patients WHERE phone = ?').get(inputPhone);
+    if (exists) {
+      const existsMsgs = {
+        hi: 'यह फ़ोन नंबर पहले से ही किसी अन्य मरीज के साथ रजिस्टर्ड है। कृपया दूसरा नंबर लिखकर भेजें।',
+        hinglish: 'Yeh phone number pehle se kisi aur patient ke sath registered hai. Kripya doosra number likhein.',
+        en: 'This phone number is already registered with another patient. Please enter a different number.'
+      };
+      await sendTextMessage(patientId, existsMsgs[lang]);
+      return;
+    }
+
     // Save to database
     db.prepare(`
       INSERT INTO patients (id, name, phone, age, gender, preferred_language)
       VALUES (?, ?, ?, ?, ?, ?)
-    `).run(patientId, session.name, phone, session.age, gender, lang);
+    `).run(patientId, session.name, inputPhone, session.age, session.gender, lang);
 
     // Sync to Google Spreadsheet
     syncPatientToGoogleSheet({
       name: session.name!,
-      phone,
+      phone: inputPhone,
       age: session.age!,
-      gender,
+      gender: session.gender!,
       lang
     }).catch(err => console.error('Failed to sync to Google Sheets:', err));
 
