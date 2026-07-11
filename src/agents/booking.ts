@@ -370,17 +370,7 @@ export async function handleBookingQuery(patientId: string, text: string, lang: 
       return;
     }
 
-    const [year, month, day] = parsedDate.split('-').map(Number);
-    const chosenDate = new Date(Date.UTC(year, month - 1, day));
-    if (chosenDate.getUTCDay() === 0) {
-      const sundayClosed = {
-        hi: 'रविवार को OPD बंद रहती है। कोई अन्य दिन चुनें।',
-        hinglish: 'Sunday ko OPD closed hai. Koi aur day select karein.',
-        en: 'OPD is closed on Sundays. Please select another day.'
-      };
-      await sendTextMessage(patientId, sundayClosed[lang]);
-      return;
-    }
+
 
     const slots = getAvailableSlots(session.doctorId!, parsedDate);
     if (slots.length === 0) {
