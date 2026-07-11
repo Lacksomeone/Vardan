@@ -29,9 +29,8 @@ export class LLMGateway {
     console.log(`Loaded ${this.keys.length} active LLM keys from database.`);
   }
 
-  // Pick a batch of N available keys, sorted by usage (least used first)
-  // If provider is specified, prefer keys from that provider first
-  private pickKeysBatch(count: number, preferredProvider?: string): LLMKeyRecord[] {
+  // Pick the best key for each active provider to race in parallel
+  private pickMultiProviderBatch(): LLMKeyRecord[] {
     const now = Date.now();
     const availableKeys = this.keys.filter(
       (k) => k.cooldown_until < now && k.active === 1
@@ -41,20 +40,35 @@ export class LLMGateway {
       return [];
     }
 
-    // Sort by usage count ascending
-    availableKeys.sort((a, b) => a.usage_count - b.usage_count);
-
-    if (!preferredProvider) {
-      return availableKeys.slice(0, count);
+    // Group keys by provider
+    const providerKeys: Record<string, LLMKeyRecord[]> = {};
+    for (const key of availableKeys) {
+      if (!providerKeys[key.provider]) {
+        providerKeys[key.provider] = [];
+      }
+      providerKeys[key.provider].push(key);
     }
 
-    // Separate preferred-provider keys from others
-    const preferred = availableKeys.filter(k => k.provider === preferredProvider);
-    const others = availableKeys.filter(k => k.provider !== preferredProvider);
+    const batch: LLMKeyRecord[] = [];
+    // From each provider group, select the one with the lowest usage count (least used)
+    for (const provider of Object.keys(providerKeys)) {
+      const keysForProvider = providerKeys[provider];
+      keysForProvider.sort((a, b) => a.usage_count - b.usage_count);
+      batch.push(keysForProvider[0]);
+    }
 
-    // Fill batch: preferred first, then others as fallback
-    const batch = [...preferred, ...others].slice(0, count);
     return batch;
+  }
+
+  // Backup fallback key picker (least used single key)
+  private pickSingleBackupKey(): LLMKeyRecord[] {
+    const now = Date.now();
+    const availableKeys = this.keys.filter(
+      (k) => k.cooldown_until < now && k.active === 1
+    );
+    if (availableKeys.length === 0) return [];
+    availableKeys.sort((a, b) => a.usage_count - b.usage_count);
+    return [availableKeys[0]];
   }
 
   // Put a key on cooldown in memory and SQLite DB
@@ -91,8 +105,8 @@ export class LLMGateway {
   ): Promise<string> {
     this.reloadKeys(); // Refresh latest cooldowns
     
-    // Pick the top 3 available keys, prioritizing preferred provider
-    const keysBatch = this.pickKeysBatch(3, preferredProvider);
+    // Pick the best key from each active provider to race in parallel (no rotation, simultaneous fetch)
+    const keysBatch = this.pickMultiProviderBatch();
     
     if (keysBatch.length === 0) {
       throw new Error('All LLM keys are currently in cooldown.');
@@ -151,7 +165,7 @@ export class LLMGateway {
       
       // Fallback: Pick next available key sequentially
       this.reloadKeys();
-      const fallbackKeys = this.pickKeysBatch(1);
+      const fallbackKeys = this.pickSingleBackupKey();
       if (fallbackKeys.length > 0) {
         return this.runSingleKeyWithRetry(fallbackKeys[0], params);
       }
