@@ -12,6 +12,7 @@ import path from 'path';
 import fs from 'fs';
 import pino from 'pino';
 import { handleIncomingMessage } from './router.js';
+import db from './db.js';
 
 const logger = pino({ level: 'silent' });
 
@@ -170,6 +171,27 @@ export async function sendTextMessage(toJid: string, text: string) {
   }
   const jid = toJid.includes('@') ? toJid : `${toJid}@s.whatsapp.net`;
   await sock.sendMessage(jid, { text });
+
+  // Log outgoing message to conversations table if recipient is a patient
+  try {
+    const patient = db.prepare('SELECT preferred_language FROM patients WHERE id = ?').get(jid) as { preferred_language: string } | undefined;
+    if (patient) {
+      // Check if this exact message was logged in the last 2 seconds to avoid duplicates from other agents
+      const recent = db.prepare(`
+        SELECT id FROM conversations 
+        WHERE patient_id = ? AND role = 'bot' AND message = ? AND timestamp >= datetime('now', '-2 seconds')
+      `).get(jid, text);
+      
+      if (!recent) {
+        db.prepare(`
+          INSERT INTO conversations (patient_id, role, message, agent_used, language)
+          VALUES (?, 'bot', ?, 'booking', ?)
+        `).run(jid, text, patient.preferred_language);
+      }
+    }
+  } catch (err) {
+    console.error('[WhatsApp] Failed to log outgoing message to database:', err);
+  }
 }
 
 // ─── Force Restart ────────────────────────────────────────────────────────────
