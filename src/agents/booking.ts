@@ -449,20 +449,6 @@ export async function handleBookingQuery(patientId: string, text: string, lang: 
 
       const patientForBook = db.prepare('SELECT name, phone FROM patients WHERE id = ?').get(patientId) as any;
 
-      // Auto-schedule follow-up reminder 9 days after appointment at 10:00 AM
-      const apptDateObj = new Date(session.date!);
-      apptDateObj.setDate(apptDateObj.getDate() + 9);
-      const followUpDateStr = apptDateObj.toISOString().split('T')[0] + ' 10:00';
-      try {
-        db.prepare(`
-          INSERT INTO follow_up_jobs (patient_id, doctor_id, trigger_date, message_template, status)
-          VALUES (?, ?, ?, 'medicine_reminder', 'pending')
-        `).run(patientId, session.doctorId, followUpDateStr);
-        console.log(`[FollowUp] Auto-scheduled for ${patientForBook.name} on ${followUpDateStr}`);
-      } catch (fuErr) {
-        console.error('[FollowUp] Failed to schedule:', fuErr);
-      }
-
       // Sync to Google Sheets
       syncAppointmentToGoogleSheet({
         patientName: patientForBook.name,
@@ -534,21 +520,6 @@ export async function handleBookingQuery(patientId: string, text: string, lang: 
           const patient = db.prepare('SELECT name, phone FROM patients WHERE id = ?').get(patientId) as any;
           const doctor = db.prepare('SELECT name, department FROM doctors WHERE id = ?').get(session.doctorId!) as any;
           
-          // Auto-schedule follow-up reminder 9 days after appointment at 10:00 AM (for 10-day medicine course)
-          const apptDate = new Date(session.date!);
-          apptDate.setDate(apptDate.getDate() + 9);
-          const followUpDate = apptDate.toISOString().split('T')[0] + ' 10:00';
-          
-          try {
-            db.prepare(`
-              INSERT INTO follow_up_jobs (patient_id, doctor_id, trigger_date, message_template, status)
-              VALUES (?, ?, ?, 'medicine_reminder', 'pending')
-            `).run(patientId, session.doctorId, followUpDate);
-            console.log(`[FollowUp] Auto-scheduled reminder for ${patient.name} on ${followUpDate}`);
-          } catch (err) {
-            console.error('[FollowUp] Failed to schedule:', err);
-          }
-
           // Sync to Google Spreadsheet in background
           syncAppointmentToGoogleSheet({
             patientName: patient.name,

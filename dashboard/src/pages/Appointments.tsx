@@ -12,7 +12,7 @@ interface Appointment {
   department: string;
   date: string;
   time_slot: string;
-  status: 'pending' | 'confirmed' | 'cancelled' | 'rescheduled';
+  status: 'pending' | 'confirmed' | 'cancelled' | 'rescheduled' | 'completed';
 }
 
 interface Doctor {
@@ -153,6 +153,32 @@ export default function Appointments() {
     }
   };
 
+  const handleComplete = async (id: number) => {
+    const daysStr = prompt('Enter medicine course duration in days (e.g. 3, 5, 10):', '5');
+    if (daysStr === null) return; // user cancelled
+    const days = parseInt(daysStr);
+    if (isNaN(days) || days < 1) {
+      alert('Please enter a valid number of days.');
+      return;
+    }
+
+    try {
+      const res = await fetch(`/api/appointments/${id}/complete`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${localStorage.getItem('token')}`
+        },
+        body: JSON.stringify({ medicine_days: days })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to complete appointment');
+      fetchAppointments();
+    } catch (err: any) {
+      alert(err.message);
+    }
+  };
+
   const handleManualBook = async (e: React.FormEvent) => {
     e.preventDefault();
     setFormError('');
@@ -241,6 +267,8 @@ export default function Appointments() {
         >
           <option value="">All Statuses</option>
           <option value="confirmed">Confirmed</option>
+          <option value="rescheduled">Rescheduled</option>
+          <option value="completed">Completed</option>
           <option value="pending">Pending</option>
           <option value="cancelled">Cancelled</option>
         </select>
@@ -314,6 +342,18 @@ export default function Appointments() {
                             <span>Confirmed</span>
                           </span>
                         )}
+                        {appt.status === 'rescheduled' && (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-blue-500/10 text-blue-400 text-xs font-semibold rounded-full">
+                            <Clock size={10} />
+                            <span>Rescheduled</span>
+                          </span>
+                        )}
+                        {appt.status === 'completed' && (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-teal-500/10 text-teal-400 text-xs font-semibold rounded-full">
+                            <CheckCircle size={10} />
+                            <span>Completed</span>
+                          </span>
+                        )}
                         {appt.status === 'cancelled' && (
                           <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-red-500/10 text-red-400 text-xs font-semibold rounded-full">
                             <XCircle size={10} />
@@ -328,15 +368,25 @@ export default function Appointments() {
                         )}
                       </td>
                       <td className="p-4 text-center">
-                        {appt.status !== 'cancelled' ? (
-                          <button
-                            onClick={() => handleCancel(appt.id)}
-                            className="px-3.5 py-1.5 bg-red-500/10 hover:bg-red-500/20 text-red-400 text-xs font-bold rounded-lg transition-all"
-                          >
-                            Cancel
-                          </button>
+                        {appt.status === 'confirmed' || appt.status === 'rescheduled' || appt.status === 'pending' ? (
+                          <div className="flex items-center justify-center gap-2">
+                            <button
+                              onClick={() => handleComplete(appt.id)}
+                              className="px-3 py-1.5 bg-teal-500/20 hover:bg-teal-500/35 text-teal-300 text-xs font-bold rounded-lg transition-all"
+                            >
+                              Complete
+                            </button>
+                            <button
+                              onClick={() => handleCancel(appt.id)}
+                              className="px-3 py-1.5 bg-red-500/10 hover:bg-red-500/20 text-red-400 text-xs font-bold rounded-lg transition-all"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        ) : appt.status === 'completed' ? (
+                          <span className="text-teal-400 font-bold text-xs">✓ Completed</span>
                         ) : (
-                          <span className="text-text-muted text-xs">-</span>
+                          <span className="text-red-400 text-xs">Cancelled</span>
                         )}
                       </td>
                     </tr>

@@ -422,21 +422,6 @@ router.post('/appointments', authMiddleware, (req, res) => {
       VALUES (?, ?, ?, ?, 'confirmed')
     `).run(formattedJid, doctor_id, date, time_slot);
 
-    // Auto-schedule follow-up reminder 9 days after appointment at 10:00 AM
-    try {
-      const apptDate = new Date(date);
-      apptDate.setDate(apptDate.getDate() + 9);
-      const followUpDate = apptDate.toISOString().split('T')[0] + ' 10:00';
-
-      db.prepare(`
-        INSERT INTO follow_up_jobs (patient_id, doctor_id, trigger_date, message_template, status)
-        VALUES (?, ?, ?, 'medicine_reminder', 'pending')
-      `).run(formattedJid, doctor_id, followUpDate);
-      console.log(`[FollowUp] Auto-scheduled from dashboard booking for ${formattedJid} on ${followUpDate}`);
-    } catch (fuErr) {
-      console.error('[FollowUp] Failed to auto-schedule from dashboard booking:', fuErr);
-    }
-
     // Sync to Google Spreadsheet in background
     const pRecord = db.prepare('SELECT name, phone FROM patients WHERE id = ?').get(formattedJid) as any;
     const dRecord = db.prepare('SELECT name FROM doctors WHERE id = ?').get(doctor_id) as any;
@@ -460,6 +445,59 @@ router.post('/appointments/:id/cancel', authMiddleware, (req, res) => {
   try {
     db.prepare("UPDATE appointments SET status = 'cancelled' WHERE id = ?").run(id);
     return res.json({ message: 'Appointment cancelled' });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/appointments/:id/complete', authMiddleware, (req: any, res) => {
+  const { id } = req.params;
+  const { medicine_days } = req.body;
+  if (!medicine_days || isNaN(Number(medicine_days)) || Number(medicine_days) < 1) {
+    return res.status(400).json({ error: 'Valid medicine days are required' });
+  }
+
+  try {
+    // 1. Mark appointment completed
+    db.prepare("UPDATE appointments SET status = 'completed' WHERE id = ?").run(id);
+    
+    // Get appointment details to schedule follow-up
+    const appt = db.prepare('SELECT * FROM appointments WHERE id = ?').get(id) as any;
+    if (appt) {
+      // 2. Clear any existing pending follow-ups for this patient/doctor
+      db.prepare("DELETE FROM follow_up_jobs WHERE patient_id = ? AND doctor_id = ? AND status = 'pending'").run(appt.patient_id, appt.doctor_id);
+
+      // 3. Compute trigger date: appointment_date + (medicine_days - 1)
+      const apptDate = new Date(appt.date);
+      apptDate.setDate(apptDate.getDate() + (Number(medicine_days) - 1));
+      const followUpDateStr = apptDate.toISOString().split('T')[0] + ' 10:00';
+
+      // 4. Create follow-up job
+      db.prepare(`
+        INSERT INTO follow_up_jobs (patient_id, doctor_id, trigger_date, message_template, status)
+        VALUES (?, ?, ?, 'medicine_reminder', 'pending')
+      `).run(appt.patient_id, appt.doctor_id, followUpDateStr);
+
+      console.log(`[FollowUp] Scheduled dynamically for ${appt.patient_id} on ${followUpDateStr} (${medicine_days} days course)`);
+
+      // Sync completed status to Google Sheets in background
+      try {
+        const pRecord = db.prepare('SELECT name, phone FROM patients WHERE id = ?').get(appt.patient_id) as any;
+        const dRecord = db.prepare('SELECT name FROM doctors WHERE id = ?').get(appt.doctor_id) as any;
+        syncAppointmentToGoogleSheet({
+          patientName: pRecord.name,
+          patientPhone: pRecord.phone,
+          doctorName: dRecord.name,
+          date: appt.date,
+          timeSlot: appt.time_slot,
+          status: 'completed'
+        }).catch(err => console.error('Failed to sync completed appointment row:', err));
+      } catch (sheetErr) {
+        console.error('Sheet sync failed on complete:', sheetErr);
+      }
+    }
+
+    return res.json({ message: 'Appointment marked completed and follow-up scheduled.' });
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
   }
