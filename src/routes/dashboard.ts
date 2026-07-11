@@ -370,7 +370,9 @@ router.post('/pending-queries/:id/resolve', authMiddleware, async (req: any, res
   }
 
   try {
-    db.transaction(() => {
+    // Manual transaction (node:sqlite DatabaseSync has no .transaction() method)
+    db.exec('BEGIN TRANSACTION');
+    try {
       // Mark resolved
       db.prepare(`
         UPDATE pending_queries 
@@ -395,7 +397,11 @@ router.post('/pending-queries/:id/resolve', authMiddleware, async (req: any, res
         INSERT INTO conversations (patient_id, role, message, agent_used, language)
         VALUES (?, ?, ?, ?, ?)
       `).run(queryRow.patient_id, 'bot', answer, 'faq', lang);
-    })();
+      db.exec('COMMIT');
+    } catch (txErr) {
+      try { db.exec('ROLLBACK'); } catch (_) {}
+      throw txErr;
+    }
 
     // Send the message to patient's WhatsApp
     await sendTextMessage(queryRow.patient_id, answer);

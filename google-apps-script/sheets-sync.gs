@@ -19,10 +19,18 @@ var SPREADSHEET_ID = '1YH1C0cFZ-JAJrMV0lhkyHtC1I5aWYPVTHDRFTNNwbas';
 
 function doPost(e) {
   try {
-    var data      = JSON.parse(e.postData.contents);
+    // Parse incoming JSON data
+    var data = JSON.parse(e.postData.contents);
     var sheetName = data.sheetName;
     var headers   = data.headers;
     var rowData   = data.rowData;
+
+    // Validate required fields
+    if (!sheetName || !rowData) {
+      return ContentService
+        .createTextOutput(JSON.stringify({ status: 'error', message: 'Missing sheetName or rowData' }))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
 
     var ss    = SpreadsheetApp.openById(SPREADSHEET_ID);
     var sheet = ss.getSheetByName(sheetName);
@@ -30,18 +38,24 @@ function doPost(e) {
     // Create sheet with headers if it doesn't exist
     if (!sheet) {
       sheet = ss.insertSheet(sheetName);
-      sheet.appendRow(headers);
+      if (headers && headers.length > 0) {
+        sheet.appendRow(headers);
+      }
     }
 
     // If sheet is empty (e.g. was cleared), re-add headers
-    if (sheet.getLastRow() === 0) {
+    if (sheet.getLastRow() === 0 && headers && headers.length > 0) {
       sheet.appendRow(headers);
     }
 
+    // Append the actual data row
     sheet.appendRow(rowData);
 
+    // Flush changes to ensure they're saved
+    SpreadsheetApp.flush();
+
     return ContentService
-      .createTextOutput(JSON.stringify({ status: 'ok' }))
+      .createTextOutput(JSON.stringify({ status: 'ok', message: 'Row added to ' + sheetName }))
       .setMimeType(ContentService.MimeType.JSON);
 
   } catch(err) {
@@ -49,6 +63,13 @@ function doPost(e) {
       .createTextOutput(JSON.stringify({ status: 'error', message: err.message }))
       .setMimeType(ContentService.MimeType.JSON);
   }
+}
+
+// Also handle GET requests (Google sometimes sends GET after redirect)
+function doGet(e) {
+  return ContentService
+    .createTextOutput(JSON.stringify({ status: 'ok', message: 'VardanAI Sheets Sync is active. Use POST to sync data.' }))
+    .setMimeType(ContentService.MimeType.JSON);
 }
 
 // Test function — run this from the Apps Script editor to verify access

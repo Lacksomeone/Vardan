@@ -348,7 +348,9 @@ export async function handleBookingQuery(patientId: string, text: string, lang: 
     // ✅ AUTO-BOOK: Skip confirmation, book immediately with race-condition check
     const doctorForBook = db.prepare('SELECT name, department FROM doctors WHERE id = ?').get(session.doctorId!) as any;
     try {
-      db.transaction(() => {
+      // Manual transaction (node:sqlite DatabaseSync has no .transaction() method)
+      db.exec('BEGIN TRANSACTION');
+      try {
         const currentSlots = getAvailableSlots(session.doctorId!, session.date!);
         if (!currentSlots.includes(session.timeSlot!)) {
           throw new Error('SLOT_TAKEN');
@@ -357,7 +359,11 @@ export async function handleBookingQuery(patientId: string, text: string, lang: 
           INSERT INTO appointments (patient_id, doctor_id, date, time_slot, status)
           VALUES (?, ?, ?, ?, 'confirmed')
         `).run(patientId, session.doctorId, session.date, session.timeSlot);
-      })();
+        db.exec('COMMIT');
+      } catch (txErr) {
+        try { db.exec('ROLLBACK'); } catch (_) {}
+        throw txErr;
+      }
 
       const patientForBook = db.prepare('SELECT name, phone FROM patients WHERE id = ?').get(patientId) as any;
 
@@ -419,7 +425,9 @@ export async function handleBookingQuery(patientId: string, text: string, lang: 
       if (session.action === 'book') {
         // Enforce race-condition double-check inside transaction
         try {
-          db.transaction(() => {
+          // Manual transaction (node:sqlite DatabaseSync has no .transaction() method)
+          db.exec('BEGIN TRANSACTION');
+          try {
             // Re-query availability
             const currentSlots = getAvailableSlots(session.doctorId!, session.date!);
             if (!currentSlots.includes(session.timeSlot!)) {
@@ -431,7 +439,11 @@ export async function handleBookingQuery(patientId: string, text: string, lang: 
               INSERT INTO appointments (patient_id, doctor_id, date, time_slot, status)
               VALUES (?, ?, ?, ?, 'confirmed')
             `).run(patientId, session.doctorId, session.date, session.timeSlot);
-          })();
+            db.exec('COMMIT');
+          } catch (txErr) {
+            try { db.exec('ROLLBACK'); } catch (_) {}
+            throw txErr;
+          }
 
           const patient = db.prepare('SELECT name, phone FROM patients WHERE id = ?').get(patientId) as any;
           const doctor = db.prepare('SELECT name, department FROM doctors WHERE id = ?').get(session.doctorId!) as any;
@@ -490,7 +502,9 @@ export async function handleBookingQuery(patientId: string, text: string, lang: 
         await sendTextMessage(patientId, successCancel[lang]);
       } else if (session.action === 'reschedule') {
         try {
-          db.transaction(() => {
+          // Manual transaction (node:sqlite DatabaseSync has no .transaction() method)
+          db.exec('BEGIN TRANSACTION');
+          try {
             const currentSlots = getAvailableSlots(session.doctorId!, session.date!);
             if (!currentSlots.includes(session.timeSlot!)) {
               throw new Error('SLOT_TAKEN');
@@ -502,7 +516,11 @@ export async function handleBookingQuery(patientId: string, text: string, lang: 
               INSERT INTO appointments (patient_id, doctor_id, date, time_slot, status)
               VALUES (?, ?, ?, ?, 'confirmed')
             `).run(patientId, session.doctorId, session.date, session.timeSlot);
-          })();
+            db.exec('COMMIT');
+          } catch (txErr) {
+            try { db.exec('ROLLBACK'); } catch (_) {}
+            throw txErr;
+          }
 
           const patient = db.prepare('SELECT name, phone FROM patients WHERE id = ?').get(patientId) as any;
           const doctor = db.prepare('SELECT name FROM doctors WHERE id = ?').get(session.doctorId!) as any;
