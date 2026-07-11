@@ -1,11 +1,11 @@
-import { proto } from '@whiskeysockets/baileys';
+import { proto, downloadMediaMessage } from '@whiskeysockets/baileys';
 import db from './db.js';
 import { sendTextMessage } from './whatsapp.js';
 import { LLMGateway } from './llm.js';
 import { handleFaqQuery } from './agents/faq.js';
 import { handleBookingQuery, hasActiveBookingSession, clearBookingSession } from './agents/booking.js';
 import { handleFollowUpResponse } from './agents/followUp.js';
-import { syncPatientToGoogleSheet } from './sheets.js';
+import { syncPatientToGoogleSheet, syncAppointmentToGoogleSheet } from './sheets.js';
 
 // In-memory registration session map
 interface RegSession {
@@ -84,12 +84,179 @@ export async function handleIncomingMessage(msg: proto.IWebMessageInfo) {
   const patientId = msg.key.remoteJid;
   if (!patientId) return;
 
+  const imageMsg = msg.message?.imageMessage;
   const text = msg.message?.conversation || 
                msg.message?.extendedTextMessage?.text || '';
   
-  if (!text.trim()) return;
+  if (!imageMsg && !text.trim()) return;
 
   const phone = patientId.split('@')[0];
+
+  // ─── Image / Prescription Analysis Flow ───
+  if (imageMsg) {
+    const patient = db.prepare('SELECT * FROM patients WHERE id = ?').get(patientId) as any;
+    if (!patient) {
+      // Prompt unregistered patient to register first
+      const registerFirst = 
+`🏥 *Vardan Hospital, Bahraich*
+
+वरदान हॉस्पिटल में आपका स्वागत है!
+प्रिस्क्रिप्शन भेजने से पहले कृपया अपना रजिस्ट्रेशन पूरा करें।
+
+Please choose your language / भाषा चुनें:
+1️⃣  हिंदी (Hindi)
+2️⃣  English
+3️⃣  Hinglish (Roman Hindi)
+
+Reply with 1, 2, or 3`;
+      regSessions[patientId] = { stage: 'lang_select', lang: 'hi' };
+      await sendTextMessage(patientId, registerFirst);
+      return;
+    }
+
+    const lang = patient.preferred_language as 'hi' | 'en' | 'hinglish';
+
+    const processingMsgs = {
+      hi: '📷 आपका फोटो मिल गया है। मैं प्रिस्क्रिप्शन (पर्चा) को पढ़ रहा हूँ, कृपया एक क्षण प्रतीक्षा करें... 🔍',
+      hinglish: '📷 Aapka photo mil gaya hai. Main prescription (parcha) ko read kar raha hu, kripya ek moment wait karein... 🔍',
+      en: '📷 We received your photo. I am analyzing the prescription slip, please wait a moment... 🔍'
+    };
+    await sendTextMessage(patientId, processingMsgs[lang]);
+
+    try {
+      // Download the image
+      const buffer = await downloadMediaMessage(msg, 'buffer', {});
+      if (!buffer) throw new Error('Failed to download image message');
+
+      const base64Data = buffer.toString('base64');
+      const mimeType = imageMsg.mimetype || 'image/jpeg';
+
+      const systemPrompt = `You are an expert medical administration assistant for Vardan Hospital, Bahraich.
+Analyze the provided image, which should be a doctor's prescription slip, medicine bill, or treatment parcha.
+Extract details in strict JSON format.
+
+If the image is NOT a medical prescription, treatment note, or medicine prescription parcha, set "is_prescription" to false.
+
+JSON Schema:
+{
+  "is_prescription": true | false,
+  "doctor_name": "Name of the doctor (e.g. Dr. Nitin Singh, Dr. Ankit Sharma, Dr. Om Shukla) if visible, else null",
+  "medicine_days": 5 // The maximum duration of the prescribed medicine course in days (e.g. 3, 5, 7, 10, 15). Look for text indicating days of dosage like "5 days", "3 din", "1 week" (7 days), "10 din", "bid x 5d". If a prescription is found but days are not specified, default to 5.
+}`;
+
+      const userPrompt = `Analyze this image and extract the prescription details matching the strict schema.`;
+      
+      const rawResult = await LLMGateway.getInstance().analyzeDocument(
+        base64Data,
+        mimeType,
+        systemPrompt,
+        userPrompt
+      );
+
+      let cleaned = rawResult.trim();
+      if (cleaned.startsWith('```json')) {
+        cleaned = cleaned.replace(/^```json/, '').replace(/```$/, '').trim();
+      } else if (cleaned.startsWith('```')) {
+        cleaned = cleaned.replace(/^```/, '').replace(/```$/, '').trim();
+      }
+
+      const parsed = JSON.parse(cleaned);
+
+      if (!parsed.is_prescription) {
+        const notPrescription = {
+          hi: '❌ क्षमा करें, यह फोटो डॉक्टर का पर्चा (prescription) नहीं लग रहा है। कृपया पर्चे का साफ फोटो दोबारा भेजें।',
+          hinglish: '❌ Sorry, yeh photo doctor ka parcha (prescription) nahi lag raha hai. Kripya parchi ka clear photo dobara bhejein.',
+          en: '❌ Sorry, this image does not appear to be a doctor\'s prescription slip. Please send a clear photo of the prescription.'
+        };
+        await sendTextMessage(patientId, notPrescription[lang]);
+        return;
+      }
+
+      const medicine_days = Number(parsed.medicine_days) || 5;
+
+      // Log conversation message
+      const logMsg = `[Sent Prescription Image] (AI Detected: ${medicine_days} days medicine course)`;
+      db.prepare(`
+        INSERT INTO conversations (patient_id, role, message, agent_used, language)
+        VALUES (?, 'patient', ?, 'router', ?)
+      `).run(patientId, logMsg, lang);
+
+      // Match doctor
+      let doctorId = 1;
+      if (parsed.doctor_name) {
+        const docNameClean = parsed.doctor_name.toLowerCase().replace('dr.', '').trim();
+        const matchedDoc = db.prepare('SELECT id FROM doctors WHERE name LIKE ?').get(`%${docNameClean}%`) as any;
+        if (matchedDoc) doctorId = matchedDoc.id;
+      }
+
+      // Check for active appointment to mark completed
+      const activeAppt = db.prepare(`
+        SELECT * FROM appointments 
+        WHERE patient_id = ? AND status IN ('confirmed', 'rescheduled', 'pending') 
+        ORDER BY date DESC LIMIT 1
+      `).get(patientId) as any;
+
+      const apptDateStr = activeAppt ? activeAppt.date : new Date().toISOString().split('T')[0];
+
+      if (activeAppt) {
+        db.prepare("UPDATE appointments SET status = 'completed' WHERE id = ?").run(activeAppt.id);
+        
+        try {
+          const docRecord = db.prepare('SELECT name FROM doctors WHERE id = ?').get(activeAppt.doctor_id) as any;
+          syncAppointmentToGoogleSheet({
+            patientName: patient.name,
+            patientPhone: patient.phone,
+            doctorName: docRecord.name,
+            date: activeAppt.date,
+            timeSlot: activeAppt.time_slot,
+            status: 'completed'
+          }).catch(err => console.error('Failed to sync completed appointment row from image upload:', err));
+        } catch (sheetErr) {
+          console.error('Sheet sync failed on image completion:', sheetErr);
+        }
+      }
+
+      // Delete existing pending follow-ups
+      db.prepare("DELETE FROM follow_up_jobs WHERE patient_id = ? AND doctor_id = ? AND status = 'pending'").run(patientId, doctorId);
+
+      // Compute trigger date: apptDateStr + (medicine_days - 1)
+      const triggerDate = new Date(apptDateStr);
+      triggerDate.setDate(triggerDate.getDate() + (medicine_days - 1));
+      const followUpDateStr = triggerDate.toISOString().split('T')[0];
+
+      // Schedule follow-up at 10:00 AM
+      db.prepare(`
+        INSERT INTO follow_up_jobs (patient_id, doctor_id, trigger_date, message_template, status)
+        VALUES (?, ?, ?, 'medicine_reminder', 'pending')
+      `).run(patientId, doctorId, followUpDateStr + ' 10:00');
+
+      const successMsgs = {
+        hi: `🏥 *प्रिस्क्रिप्शन स्वीकृत!*\n\nनमस्ते ${patient.name} जी, हमें आपका पर्चा मिल गया है।\n\n📌 *दवा कोर्स*: ${medicine_days} दिन\n📅 *फॉलो-अप रिमाइंडर*: ${followUpDateStr}\n\nहमने आपके लिए follow-up रिमाइंडर सेट कर दिया है। दवा खत्म होने से 1 दिन पहले आपको मेसेज मिल जाएगा।`,
+        hinglish: `🏥 *Prescription Accepted!*\n\nNamaste ${patient.name} ji, hume aapka parcha mil gaya hai.\n\n📌 *Medicine Course*: ${medicine_days} days\n📅 *Follow-up Reminder*: ${followUpDateStr}\n\nHumne aapke liye follow-up reminder set kar diya hai. Dawa khatam hone se 1 day pehle aapko message mil jayega.`,
+        en: `🏥 *Prescription Approved!*\n\nHello ${patient.name}, we have received your prescription slip.\n\n📌 *Medicine Course*: ${medicine_days} days\n📅 *Follow-up Reminder*: ${followUpDateStr}\n\nWe have scheduled your follow-up reminder. You will receive a notification 1 day before your medicine runs out.`
+      };
+      
+      const botResponse = successMsgs[lang];
+      await sendTextMessage(patientId, botResponse);
+
+      db.prepare(`
+        INSERT INTO conversations (patient_id, role, message, agent_used, language)
+        VALUES (?, 'bot', ?, 'router', ?)
+      `).run(patientId, botResponse, lang);
+
+    } catch (err: any) {
+      console.error('[WhatsApp Image Analysis] Error:', err);
+      const errorMsg = {
+        hi: '❌ क्षमा करें, आपका प्रिस्क्रिप्शन प्रोसेस करने में समस्या आई। कृपया फ़ोटो की क्वालिटी चेक करें या दोबारा भेजें।',
+        hinglish: '❌ Sorry, aapka prescription process karne me problem aayi. Kripya photo ki quality check karein ya dobara bhejein.',
+        en: '❌ Sorry, we had trouble processing your prescription image. Please ensure the photo is clear and try again.'
+      };
+      await sendTextMessage(patientId, errorMsg[lang]);
+    }
+    return;
+  }
+
+
 
   // ─── Global Reset / Restart Check ───
   const cleanText = text.trim().toLowerCase();
