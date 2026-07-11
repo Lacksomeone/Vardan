@@ -161,6 +161,10 @@ export async function connectToWhatsApp() {
 
 // ─── Send Message ─────────────────────────────────────────────────────────────
 export async function sendTextMessage(toJid: string, text: string) {
+  if (process.env.NODE_ENV === 'test') {
+    console.log(`   [TEST MOCK SEND] to: ${toJid} Message: ${text.replace(/\n/g, ' ')}`);
+    return;
+  }
   if (!sock || connectionStatus !== 'connected') {
     throw new Error('WhatsApp not connected');
   }
