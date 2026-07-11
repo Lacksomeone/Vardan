@@ -203,6 +203,21 @@ router.post('/appointments', authMiddleware, (req, res) => {
       VALUES (?, ?, ?, ?, 'confirmed')
     `).run(formattedJid, doctor_id, date, time_slot);
 
+    // Auto-schedule follow-up reminder 9 days after appointment at 10:00 AM
+    try {
+      const apptDate = new Date(date);
+      apptDate.setDate(apptDate.getDate() + 9);
+      const followUpDate = apptDate.toISOString().split('T')[0] + ' 10:00';
+
+      db.prepare(`
+        INSERT INTO follow_up_jobs (patient_id, doctor_id, trigger_date, message_template, status)
+        VALUES (?, ?, ?, 'medicine_reminder', 'pending')
+      `).run(formattedJid, doctor_id, followUpDate);
+      console.log(`[FollowUp] Auto-scheduled from dashboard booking for ${formattedJid} on ${followUpDate}`);
+    } catch (fuErr) {
+      console.error('[FollowUp] Failed to auto-schedule from dashboard booking:', fuErr);
+    }
+
     // Sync to Google Spreadsheet in background
     const pRecord = db.prepare('SELECT name, phone FROM patients WHERE id = ?').get(formattedJid) as any;
     const dRecord = db.prepare('SELECT name FROM doctors WHERE id = ?').get(doctor_id) as any;
