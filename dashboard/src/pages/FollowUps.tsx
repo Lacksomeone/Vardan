@@ -29,10 +29,14 @@ const statusIcon: Record<string, any> = {
   escalated: <AlertTriangle size={12} />,
 };
 
-const templates = [
+const templatesList = (customText: string) => [
   {
     name: 'Custom Message',
     text: '',
+  },
+  {
+    name: '⭐ My Custom Saved Template',
+    text: customText,
   },
   {
     name: 'Holi Greetings (Hindi)',
@@ -73,6 +77,11 @@ export default function FollowUps() {
   const [uploading, setUploading] = useState(false);
   const [sendingBulk, setSendingBulk] = useState(false);
   const [bulkStatus, setBulkStatus] = useState<string | null>(null);
+
+  const [customTemplateText, setCustomTemplateText] = useState(localStorage.getItem('custom_outreach_template') || '');
+  const [sheetImporting, setSheetImporting] = useState(false);
+
+  const templates = templatesList(customTemplateText);
 
   const token = () => localStorage.getItem('token');
   const headers = () => ({ Authorization: `Bearer ${token()}`, 'Content-Type': 'application/json' });
@@ -189,6 +198,98 @@ export default function FollowUps() {
       setBulkStatus(`❌ Error: ${err.message}`);
     }
     setSendingBulk(false);
+  };
+
+  // Import from Google Sheets
+  const handleImportGoogleSheets = async () => {
+    setSheetImporting(true);
+    setBulkStatus(null);
+    try {
+      const res = await fetch('/api/patients/import-sheets', { headers: headers() });
+      if (!res.ok) {
+        throw new Error(await res.text() || 'Failed to fetch patients from Google Sheets');
+      }
+      const data = await res.json() as Patient[];
+      
+      setPatients(prev => {
+        const merged = [...prev];
+        let importedCount = 0;
+        for (const item of data) {
+          if (!merged.some(p => p.phone === item.phone)) {
+            merged.push(item);
+            importedCount++;
+          }
+        }
+        setBulkStatus(`✅ Successfully imported ${importedCount} new patients from Google Sheets!`);
+        return merged;
+      });
+    } catch (err: any) {
+      setBulkStatus(`❌ Sheets Import Error: ${err.message}`);
+    } finally {
+      setSheetImporting(false);
+    }
+  };
+
+  // Import from vCard (.vcf) File
+  const handleVCFUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    
+    setBulkStatus('⚡ Parsing vCard (.vcf) file...');
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const textVal = event.target?.result as string;
+      try {
+        const parsedContacts: Patient[] = [];
+        const cards = textVal.split('BEGIN:VCARD');
+        for (const card of cards) {
+          if (!card.trim()) continue;
+          let name = '';
+          let phone = '';
+          const lines = card.split(/\r?\n/);
+          for (const line of lines) {
+            if (line.toUpperCase().startsWith('FN:')) {
+              name = line.substring(3).trim();
+            } else if (line.toUpperCase().startsWith('TEL;')) {
+              const parts = line.split(':');
+              if (parts.length > 1) {
+                phone = parts[1].replace(/\D/g, ''); // keep only numbers
+              }
+            } else if (line.toUpperCase().startsWith('TEL:')) {
+              phone = line.substring(4).replace(/\D/g, '');
+            }
+          }
+          if (name && phone) {
+            parsedContacts.push({
+              id: `vcf_${phone}`,
+              name,
+              phone,
+              preferred_language: 'hinglish'
+            });
+          }
+        }
+
+        if (parsedContacts.length > 0) {
+          setPatients(prev => {
+            const merged = [...prev];
+            let importedCount = 0;
+            for (const item of parsedContacts) {
+              if (!merged.some(p => p.phone === item.phone)) {
+                merged.push(item);
+                importedCount++;
+              }
+            }
+            setBulkStatus(`✅ Successfully loaded ${importedCount} new contacts from .vcf!`);
+            return merged;
+          });
+        } else {
+          setBulkStatus('❌ No valid contacts found in .vcf file.');
+        }
+      } catch (err: any) {
+        setBulkStatus(`❌ vCard Parse Error: ${err.message}`);
+      }
+    };
+    reader.readAsText(file);
   };
 
   const filteredJobs = filterStatus === 'all' ? jobs : jobs.filter(j => j.status === filterStatus);
@@ -422,6 +523,21 @@ export default function FollowUps() {
                 className="w-full pl-9 pr-4 py-2 rounded-xl text-xs text-white border border-white/10 outline-none placeholder-white/30 bg-white/5 focus:border-white/20 transition-all" />
             </div>
 
+            {/* Import Options */}
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                onClick={handleImportGoogleSheets}
+                disabled={sheetImporting}
+                className="flex items-center justify-center gap-1.5 py-2 border border-white/10 rounded-xl text-[10px] font-bold text-white hover:bg-white/5 disabled:opacity-40 transition-all"
+              >
+                <span>📊 {sheetImporting ? 'Importing...' : 'Google Sheets'}</span>
+              </button>
+              <label className="flex items-center justify-center gap-1.5 py-2 border border-white/10 rounded-xl text-[10px] font-bold text-white hover:bg-white/5 cursor-pointer transition-all">
+                <span>📁 Import .VCF</span>
+                <input type="file" accept=".vcf" className="hidden" onChange={handleVCFUpload} />
+              </label>
+            </div>
+
             {/* Select All Checkbox */}
             {filteredPatients.length > 0 && (
               <label className="flex items-center gap-3 px-3 py-2 rounded-xl border border-white/5 bg-white/5 cursor-pointer select-none">
@@ -472,7 +588,21 @@ export default function FollowUps() {
 
               {/* Template quick-select */}
               <div>
-                <label className="block text-xs font-semibold text-white/60 mb-1.5">Load Template</label>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="block text-xs font-semibold text-white/60">Load Template</label>
+                  {bulkMessage.trim() && (
+                    <button
+                      onClick={() => {
+                        localStorage.setItem('custom_outreach_template', bulkMessage);
+                        setCustomTemplateText(bulkMessage);
+                        setBulkStatus('⭐ Message saved as custom template!');
+                      }}
+                      className="text-[10px] font-bold text-teal-400 hover:underline bg-transparent border-none cursor-pointer"
+                    >
+                      💾 Save Current Text as Custom Template
+                    </button>
+                  )}
+                </div>
                 <select onChange={e => setBulkMessage(e.target.value)}
                   className="w-full px-3 py-2.5 rounded-xl text-xs text-white border border-white/10 outline-none font-sans"
                   style={{ background: 'rgba(255,255,255,0.06)' }}>

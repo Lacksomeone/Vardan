@@ -509,6 +509,17 @@ router.get('/patients', authMiddleware, (req, res) => {
   return res.json(patients);
 });
 
+router.get('/patients/import-sheets', authMiddleware, async (req, res) => {
+  try {
+    const { getPatientsFromGoogleSheet } = await import('../sheets.js');
+    const sheetPatients = await getPatientsFromGoogleSheet();
+    return res.json(sheetPatients);
+  } catch (err: any) {
+    console.error('[Import Google Sheets Patients] failed:', err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 router.get('/patients/:id/history', authMiddleware, (req: any, res) => {
   // Decode the patient ID — WhatsApp JIDs contain '@' which gets URL-encoded
   const id = decodeURIComponent(req.params.id);
@@ -687,16 +698,30 @@ router.post('/pending-queries/:id/resolve', authMiddleware, async (req: any, res
 
 // 7. Live Monitoring
 router.get('/monitor/status', authMiddleware, (req, res) => {
-  const keys = db.prepare('SELECT id, provider, cooldown_until, usage_count, active FROM llm_keys').all() as any[];
+  const keys = db.prepare('SELECT id, provider, key_val, cooldown_until, usage_count, active FROM llm_keys').all() as any[];
   
-  // Format cooldowns to Boolean
+  // Format cooldowns to Boolean and mask key values
   const formattedKeys = keys.map(k => ({
     id: k.id,
     provider: k.provider,
+    key: k.key_val ? `${k.key_val.slice(0, 8)}...${k.key_val.slice(-5)}` : 'N/A',
     usage: k.usage_count,
     active: k.active,
     coolingDown: k.cooldown_until > Date.now()
   }));
+
+  // Fetch agent status timestamps from conversations and logs
+  const lastFaq = db.prepare("SELECT timestamp FROM conversations WHERE agent_used IN ('router', 'faq', 'auto_resolver') ORDER BY timestamp DESC LIMIT 1").get() as any;
+  const lastBooking = db.prepare("SELECT timestamp FROM conversations WHERE agent_used = 'booking' ORDER BY timestamp DESC LIMIT 1").get() as any;
+  const lastFollowUp = db.prepare("SELECT timestamp FROM conversations WHERE agent_used IN ('follow_up', 'follow_up_scheduler', 'bulk_sender') ORDER BY timestamp DESC LIMIT 1").get() as any;
+  const lastLog = db.prepare("SELECT timestamp FROM llm_call_logs ORDER BY timestamp DESC LIMIT 1").get() as any;
+
+  const agents = [
+    { name: 'FAQ Agent', description: 'Answers queries using RAG Knowledge Base.', lastActive: lastFaq?.timestamp || 'Never', status: 'Active' },
+    { name: 'Booking Agent', description: 'Schedules, reschedules, and cancels appointments.', lastActive: lastBooking?.timestamp || 'Never', status: 'Active' },
+    { name: 'Follow-Up Agent', description: 'Schedules reminders, tracks medicine courses, and alerts doctors.', lastActive: lastFollowUp?.timestamp || 'Never', status: 'Active' },
+    { name: 'Programming Agent', description: 'Runs self-healing, unlocks database, resets cooldowns and runs AI diagnostics.', lastActive: lastLog?.timestamp || 'Never', status: 'Running' }
+  ];
 
   // Fetch average latency and success rates from logs
   const logs = db.prepare(`
@@ -716,6 +741,7 @@ router.get('/monitor/status', authMiddleware, (req, res) => {
       lastError: lastError
     },
     keys: formattedKeys,
+    agents: agents,
     telemetry: logs
   });
 });

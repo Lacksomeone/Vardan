@@ -207,3 +207,28 @@ export async function syncAppointmentToGoogleSheet(appointment: {
     console.error('Failed to sync appointment row to Google Sheet:', err);
   }
 }
+
+// Fetch all registered patients from Google Sheet
+export async function getPatientsFromGoogleSheet(): Promise<{ name: string; phone: string; preferred_language: string }[]> {
+  const sheets = getSheetsClient();
+  if (!sheets) {
+    throw new Error('Google Sheets Service Account credentials not configured.');
+  }
+  
+  try {
+    const response = await sheets.spreadsheets.values.get({
+      spreadsheetId: SPREADSHEET_ID,
+      range: 'Patients!A2:E' // columns: Name, Phone, Age, Gender, Preferred Language
+    });
+    
+    const rows = response.data.values || [];
+    return rows.map((row: any) => ({
+      name: row[0] || 'Unknown',
+      phone: (row[1] || '').replace(/\D/g, ''),
+      preferred_language: (row[4] || 'hinglish').toLowerCase()
+    })).filter((p: any) => p.phone);
+  } catch (err: any) {
+    console.error('Failed to get patients from Google Sheet:', err);
+    throw new Error(`Google Sheets fetch failed: ${err.message}`);
+  }
+}

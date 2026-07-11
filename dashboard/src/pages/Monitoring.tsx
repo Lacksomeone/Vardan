@@ -5,6 +5,7 @@ import { Smartphone, RefreshCw, AlertTriangle, Key, Cpu, Zap } from 'lucide-reac
 interface LLMKeyInfo {
   id: number;
   provider: 'groq' | 'gemini' | 'openrouter';
+  key: string;
   usage: number;
   active: number;
   coolingDown: boolean;
@@ -16,9 +17,17 @@ interface TelemetryInfo {
   success_rate: number;
 }
 
+interface AgentInfo {
+  name: string;
+  description: string;
+  lastActive: string;
+  status: string;
+}
+
 export default function Monitoring() {
   const [whatsapp, setWhatsapp] = useState<{ status: string; qrAvailable: boolean; qrString: string | null } | null>(null);
   const [keys, setKeys] = useState<LLMKeyInfo[]>([]);
+  const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [telemetry, setTelemetry] = useState<TelemetryInfo[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -30,6 +39,7 @@ export default function Monitoring() {
       const data = await res.json();
       setWhatsapp(data.whatsapp);
       setKeys(data.keys);
+      setAgents(data.agents || []);
       setTelemetry(data.telemetry);
     } catch (err) {
       console.error(err);
@@ -66,6 +76,41 @@ export default function Monitoring() {
           <span>Refresh Status</span>
         </button>
       </div>
+
+      {/* 4 Agents Status Grid */}
+      {!loading && agents.length > 0 && (
+        <div className="space-y-4">
+          <div className="flex items-center gap-2">
+            <Cpu size={20} className="text-accent-color animate-pulse" />
+            <h2 className="text-xl font-bold font-hero text-text-main">AI Orchestrator & Agents Console</h2>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+            {agents.map(a => (
+              <div key={a.name} className="glass-panel p-4 border border-card-border space-y-3 relative overflow-hidden flex flex-col justify-between">
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <h3 className="font-bold text-text-main text-xs font-hero">{a.name}</h3>
+                    <span className={`px-2 py-0.5 rounded-full text-[8px] font-extrabold capitalize ${
+                      a.status === 'Active' || a.status === 'Running' 
+                        ? 'bg-green-500/10 text-green-400 border border-green-500/20' 
+                        : 'bg-red-500/10 text-red-400 border border-red-500/20'
+                    }`}>
+                      {a.status}
+                    </span>
+                  </div>
+                  <p className="text-text-muted text-[11px] font-body leading-relaxed">{a.description}</p>
+                </div>
+                <div className="text-[10px] text-text-muted/70 font-body border-t border-card-border/35 pt-2 flex items-center justify-between">
+                  <span>Last Active:</span>
+                  <span className="text-text-main font-semibold font-mono">
+                    {a.lastActive !== 'Never' ? new Date(a.lastActive).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : 'Never'}
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {loading ? (
         <div className="text-center py-12 text-text-muted font-body">Polling telemetry status...</div>
@@ -161,6 +206,9 @@ export default function Monitoring() {
                       </div>
                       <div className="text-[9px] mt-0.5 text-text-muted">
                         Calls: {k.usage}
+                      </div>
+                      <div className="text-[8px] mt-1 text-accent-color font-mono opacity-85 select-all truncate w-full" title={k.key}>
+                        {k.key}
                       </div>
 
                       {k.coolingDown && (
