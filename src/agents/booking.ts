@@ -49,11 +49,12 @@ function parseWindowToSlots(window: string): string[] {
   return slots;
 }
 
-// Get day name from date string
+// Get day name from date string in UTC to avoid timezone shifts
 function getDayName(dateStr: string): string {
   const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-  const date = new Date(dateStr);
-  return days[date.getDay()];
+  const [year, month, day] = dateStr.split('-').map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return days[date.getUTCDay()];
 }
 
 // Fetch available slots for a doctor on a given date
@@ -85,8 +86,93 @@ function getAvailableSlots(doctorId: number, dateStr: string): string[] {
   return allSlots.filter(slot => !bookedSlots.includes(slot));
 }
 
+function parseDateLocally(text: string): string | null {
+  const clean = text.trim().toLowerCase();
+  const today = new Date();
+
+  // 1. "today" / "aaj" / "now"
+  if (clean === 'today' || clean === 'aaj' || clean === 'aaj hi' || clean === 'now') {
+    return today.toISOString().split('T')[0];
+  }
+
+  // 2. "tomorrow" / "kal"
+  if (clean === 'tomorrow' || clean === 'kal' || clean === 'kal ka') {
+    const tomorrow = new Date(today);
+    tomorrow.setDate(today.getDate() + 1);
+    return tomorrow.toISOString().split('T')[0];
+  }
+
+  // 3. "day after tomorrow" / "parso"
+  if (clean === 'day after tomorrow' || clean === 'parso' || clean === 'parson') {
+    const parso = new Date(today);
+    parso.setDate(today.getDate() + 2);
+    return parso.toISOString().split('T')[0];
+  }
+
+  // 4. Weekdays: "monday", "tuesday", etc.
+  const weekdays = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+  const dayIndex = weekdays.indexOf(clean);
+  if (dayIndex !== -1) {
+    const nextDay = new Date(today);
+    const currentDayIndex = today.getDay();
+    let diff = dayIndex - currentDayIndex;
+    if (diff <= 0) diff += 7;
+    nextDay.setDate(today.getDate() + diff);
+    return nextDay.toISOString().split('T')[0];
+  }
+
+  // 5. Month name: e.g. "11 july", "13 July 2026", "July 13"
+  const months = ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december'];
+  const monthsShort = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+
+  const numMatch = clean.match(/\d+/);
+  if (numMatch) {
+    const dayNum = parseInt(numMatch[0], 10);
+    if (dayNum >= 1 && dayNum <= 31) {
+      let foundMonthIndex = -1;
+      for (let i = 0; i < 12; i++) {
+        if (clean.includes(months[i]) || clean.includes(monthsShort[i])) {
+          foundMonthIndex = i;
+          break;
+        }
+      }
+      if (foundMonthIndex !== -1) {
+        const yearMatch = clean.match(/\b(202\d)\b/);
+        const yearNum = yearMatch ? parseInt(yearMatch[1], 10) : today.getFullYear();
+        const dateObj = new Date(Date.UTC(yearNum, foundMonthIndex, dayNum));
+        return dateObj.toISOString().split('T')[0];
+      }
+    }
+  }
+
+  // 6. Numeric formats: e.g. "13-07-2026", "13/07/26", "13.07", "13-7"
+  const datePartsMatch = clean.match(/(\d{1,2})[-/.](\d{1,2})([-/.](\d{2,4}))?/);
+  if (datePartsMatch) {
+    const d = parseInt(datePartsMatch[1], 10);
+    const m = parseInt(datePartsMatch[2], 10);
+    if (d >= 1 && d <= 31 && m >= 1 && m <= 12) {
+      let y = today.getFullYear();
+      if (datePartsMatch[4]) {
+        const yearStr = datePartsMatch[4];
+        y = yearStr.length === 2 ? 2000 + parseInt(yearStr, 10) : parseInt(yearStr, 10);
+      }
+      const dateObj = new Date(Date.UTC(y, m - 1, d));
+      return dateObj.toISOString().split('T')[0];
+    }
+  }
+
+  return null;
+}
+
 // Parse date text (e.g. "tomorrow", "12 July", "Monday") into YYYY-MM-DD
 async function parseDateWithLLM(text: string): Promise<string | null> {
+  // First-line defense: try parsing locally for fast and robust match
+  const localMatch = parseDateLocally(text);
+  if (localMatch) {
+    console.log(`[DateParser] parsed "${text}" locally -> ${localMatch}`);
+    return localMatch;
+  }
+
   const today = new Date();
   const todayStr = today.toISOString().split('T')[0];
   const options: Intl.DateTimeFormatOptions = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' };
@@ -273,10 +359,8 @@ export async function handleBookingQuery(patientId: string, text: string, lang: 
       return;
     }
 
-    const today = new Date(); today.setHours(0,0,0,0);
-    const [year, month, day] = parsedDate.split('-').map(Number);
-    const chosenDate = new Date(year, month - 1, day);
-    if (chosenDate < today) {
+    const todayStr = new Date().toISOString().split('T')[0];
+    if (parsedDate < todayStr) {
       const pastDate = {
         hi: 'पिछली तारीख नहीं चुन सकते। कृपया आने वाले समय की तारीख बताएं।',
         hinglish: 'Past date select nahi kar sakte. Future date batayein.',
@@ -286,7 +370,9 @@ export async function handleBookingQuery(patientId: string, text: string, lang: 
       return;
     }
 
-    if (chosenDate.getDay() === 0) {
+    const [year, month, day] = parsedDate.split('-').map(Number);
+    const chosenDate = new Date(Date.UTC(year, month - 1, day));
+    if (chosenDate.getUTCDay() === 0) {
       const sundayClosed = {
         hi: 'रविवार को OPD बंद रहती है। कोई अन्य दिन चुनें।',
         hinglish: 'Sunday ko OPD closed hai. Koi aur day select karein.',
