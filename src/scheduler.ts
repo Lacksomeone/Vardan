@@ -5,7 +5,9 @@ import { sendTextMessage } from './whatsapp.js';
 export async function runSchedulerCheck() {
   console.log('[Scheduler] Running follow-up check...');
 
-  const todayStr = new Date().toISOString().split('T')[0];
+  // Get current date and time in Indian Standard Time formatted as "YYYY-MM-DD HH:mm"
+  // using sv-SE locale which outputs ISO-like format: "YYYY-MM-DD HH:mm:ss"
+  const nowISTStr = new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Kolkata' }).substring(0, 16);
   
   // 1. Process PENDING jobs scheduled for today or earlier
   const pendingJobs = db.prepare(`
@@ -15,8 +17,11 @@ export async function runSchedulerCheck() {
     FROM follow_up_jobs f
     JOIN patients p ON f.patient_id = p.id
     JOIN doctors d ON f.doctor_id = d.id
-    WHERE f.status = 'pending' AND f.trigger_date <= ?
-  `).all(todayStr) as any[];
+    WHERE f.status = 'pending' AND (
+      f.trigger_date <= ? OR 
+      (length(f.trigger_date) = 10 AND f.trigger_date <= substring(?, 1, 10))
+    )
+  `).all(nowISTStr, nowISTStr) as any[];
 
   for (const job of pendingJobs) {
     try {

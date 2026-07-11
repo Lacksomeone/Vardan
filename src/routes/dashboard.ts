@@ -516,11 +516,15 @@ router.post('/followups', authMiddleware, (req: any, res) => {
   if (!patientId || !doctorId || !triggerDate) {
     return res.status(400).json({ error: 'patientId, doctorId, triggerDate required' });
   }
+  
+  // Clean triggerDate to ensure it is in format "YYYY-MM-DD HH:mm" or "YYYY-MM-DD"
+  const cleanTriggerDate = triggerDate.replace('T', ' ');
+  
   try {
     const result = db.prepare(`
       INSERT INTO follow_up_jobs (patient_id, doctor_id, trigger_date, message_template, status)
       VALUES (?, ?, ?, 'medicine_reminder', 'pending')
-    `).run(patientId, doctorId, triggerDate);
+    `).run(patientId, doctorId, cleanTriggerDate);
     return res.json({ id: result.lastInsertRowid, message: 'Follow-up scheduled' });
   } catch (err: any) {
     return res.status(500).json({ error: err.message });

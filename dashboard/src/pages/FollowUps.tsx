@@ -65,7 +65,7 @@ export default function FollowUps() {
     if (form.days) {
       const d = new Date();
       d.setDate(d.getDate() + parseInt(form.days) - 1);
-      setForm(f => ({ ...f, triggerDate: d.toISOString().split('T')[0] }));
+      setForm(f => ({ ...f, triggerDate: d.toISOString().split('T')[0] + 'T10:00' }));
     }
   }, [form.days]);
 
@@ -163,8 +163,8 @@ export default function FollowUps() {
 
             {/* Trigger Date (auto-calculated) */}
             <div>
-              <label className="block text-xs font-semibold text-white/60 mb-1.5">Reminder Date (auto-set)</label>
-              <input type="date" value={form.triggerDate}
+              <label className="block text-xs font-semibold text-white/60 mb-1.5">Reminder Date & Time (auto-set)</label>
+              <input type="datetime-local" value={form.triggerDate}
                 onChange={e => setForm(f => ({...f, triggerDate: e.target.value}))}
                 className="w-full px-3 py-2.5 rounded-xl text-sm text-white border border-white/15 outline-none"
                 style={{ background: 'rgba(255,255,255,0.06)' }} />

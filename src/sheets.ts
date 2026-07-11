@@ -81,35 +81,14 @@ async function syncViaWebApp(sheetName: string, headers: string[], rowData: any[
   try {
     const payload = JSON.stringify({ sheetName, headers, rowData });
     
-    // Google Apps Script Web App returns a 302 redirect on POST.
-    // Default fetch behavior follows the redirect but changes POST → GET, losing the body.
-    // We use redirect: 'manual' and follow the redirect manually with a new POST request.
+    // Automatically follow Google Apps Script 302 redirects.
+    // Node fetch handles this correctly and returns the final JSON response.
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: payload,
-      redirect: 'manual'
+      redirect: 'follow'
     });
-
-    // Handle Google's redirect (302/301) — re-POST to the redirect URL
-    if (res.status === 301 || res.status === 302 || res.status === 307 || res.status === 308) {
-      const redirectUrl = res.headers.get('location');
-      if (redirectUrl) {
-        const followRes = await fetch(redirectUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: payload,
-          redirect: 'follow'
-        });
-        if (followRes.ok) {
-          const result = await followRes.text();
-          console.log(`Successfully synced to sheet "${sheetName}" via Google Web App URL. Response: ${result}`);
-          return true;
-        }
-        console.error(`Google Apps Script sync redirect failed for "${sheetName}": HTTP ${followRes.status}`);
-        return false;
-      }
-    }
     
     if (res.ok) {
       const result = await res.text();
