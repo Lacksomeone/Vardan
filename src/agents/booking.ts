@@ -252,9 +252,9 @@ export async function handleBookingQuery(patientId: string, text: string, lang: 
       .join(', ');
 
     const datePrompt = {
-      hi: `Dr. ${doctor.name} (${doctor.department}) के लिए तारीख बताएं।\n\nउपलब्ध दिन: *${availableDays}*\n\nउदाहरण: कल, सोमवार, 15 July`,
-      hinglish: `Dr. ${doctor.name} (${doctor.department}) ke liye date batayein.\n\nAvailable days: *${availableDays}*\n\nExample: kal, Monday, 15 July`,
-      en: `Please specify the date for Dr. ${doctor.name} (${doctor.department}).\n\nAvailable days: *${availableDays}*\n\nExample: tomorrow, Monday, July 15`
+      hi: `Dr. ${doctor.name} के लिए दिनांक (तारीख, महीना, वर्ष) बताएं (जैसे: 15 July या कल)।`,
+      hinglish: `Dr. ${doctor.name} ke liye date (tarikh, mahina, saal) batayein (example: 15 July ya kal).`,
+      en: `Please specify the date (date, month, year) for Dr. ${doctor.name} (e.g., July 15 or tomorrow).`
     };
     await sendTextMessage(patientId, datePrompt[lang]);
     return;
