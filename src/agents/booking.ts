@@ -177,7 +177,7 @@ export async function handleBookingQuery(patientId: string, text: string, lang: 
       }
 
       bookingSessions[patientId] = {
-        stage: 'doctor_or_symptom',
+        stage: 'date', // Skip doctor selection and go directly to date selection
         action: 'reschedule',
         appointmentIdToModify: activeAppt.id,
         doctorId: activeAppt.doctor_id
@@ -355,6 +355,12 @@ export async function handleBookingQuery(patientId: string, text: string, lang: 
         if (!currentSlots.includes(session.timeSlot!)) {
           throw new Error('SLOT_TAKEN');
         }
+
+        // If rescheduling, cancel the old appointment first
+        if (session.action === 'reschedule' && session.appointmentIdToModify) {
+          db.prepare("UPDATE appointments SET status = 'cancelled' WHERE id = ?").run(session.appointmentIdToModify);
+        }
+
         db.prepare(`
           INSERT INTO appointments (patient_id, doctor_id, date, time_slot, status)
           VALUES (?, ?, ?, ?, 'confirmed')
@@ -388,10 +394,14 @@ export async function handleBookingQuery(patientId: string, text: string, lang: 
         doctorName: doctorForBook.name,
         date: session.date!,
         timeSlot: session.timeSlot!,
-        status: 'confirmed'
+        status: session.action === 'reschedule' ? 'rescheduled' : 'confirmed'
       }).catch(err => console.error('Failed to sync appointment to Google Sheets:', err));
 
-      const autoBookedMsg = {
+      const autoBookedMsg = session.action === 'reschedule' ? {
+        hi: `✅ आपका अपॉइंटमेंट सफलतापूर्वक बदल दिया गया है। अब यह Dr. ${doctorForBook.name} के साथ ${session.date} को ${session.timeSlot} बजे है।`,
+        hinglish: `✅ Aapka appointment successfully change ho gaya hai. Ab yeh Dr. ${doctorForBook.name} ke sath ${session.date} ko ${session.timeSlot} baje hai.`,
+        en: `✅ Your appointment has been successfully rescheduled. It is now with Dr. ${doctorForBook.name} on ${session.date} at ${session.timeSlot}.`
+      } : {
         hi: `✅ आपका अपॉइंटमेंट Dr. ${doctorForBook.name} (${doctorForBook.department}) के साथ ${session.date} को ${session.timeSlot} बजे बुक हो गया है! कृपया समय पर अस्पताल पहुंचें।`,
         hinglish: `✅ Aapka appointment Dr. ${doctorForBook.name} (${doctorForBook.department}) ke sath ${session.date} ko ${session.timeSlot} par book ho gaya hai! Kripya time par hospital pahuchein.`,
         en: `✅ Your appointment with Dr. ${doctorForBook.name} (${doctorForBook.department}) on ${session.date} at ${session.timeSlot} has been booked! Please arrive on time.`
