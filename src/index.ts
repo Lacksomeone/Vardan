@@ -6,6 +6,7 @@ import dotenv from 'dotenv';
 import { initDb } from './db.js';
 import { connectToWhatsApp } from './whatsapp.js';
 import { startScheduler } from './scheduler.js';
+import { autoResolvePendingQueries } from './agents/faq.js';
 import dashboardRouter from './routes/dashboard.js';
 
 dotenv.config();
@@ -20,6 +21,11 @@ connectToWhatsApp().catch(err => {
 
 // 3. Start Follow-Up Scheduler
 startScheduler();
+
+// 3.5 Auto-resolve pending queries using AI
+setTimeout(() => {
+  autoResolvePendingQueries().catch(err => console.error('[FAQ AutoResolver] Error:', err));
+}, 30000);
 
 // 4. Initialize Express Application
 const app = express();

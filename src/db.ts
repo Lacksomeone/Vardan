@@ -315,9 +315,9 @@ export function initDb() {
           'hospital timing', 'opening hours', 'what time does it open', 'kab khulta hai', 'timing kya hai',
           'samay', 'opd timing', 'hospital open time'
         ]),
-        answer_hi: 'वरदान हॉस्पिटल सोमवार से शनिवार सुबह 9:00 बजे से रात 8:00 बजे तक खुला रहता है। रविवार को केवल आपातकालीन सेवाएं (Emergency services) उपलब्ध हैं।',
-        answer_en: 'Vardan Hospital is open Monday to Saturday from 9:00 AM to 8:00 PM. Emergency services are available 24/7, including Sundays.',
-        answer_hinglish: 'Vardan Hospital Monday se Saturday subah 9:00 baje se raat 8:00 baje tak khula rehta hai. Sunday ko sirf emergency services available hain.'
+        answer_hi: 'वरदान हॉस्पिटल 24 घंटे और सातों दिन (24/7) खुला रहता है। बस डॉक्टरों की शिफ्ट समय-समय पर बदलती रहती है। आपातकालीन सेवाएं हमेशा उपलब्ध हैं।',
+        answer_en: 'Vardan Hospital is open 24/7. Only the doctors\' shifts change dynamically throughout the day. Emergency services are available round the clock.',
+        answer_hinglish: 'Vardan Hospital 24/7 (24 ghante aur 7 din) khula rehta hai. Bas doctors ki shift change hoti rehti hai. Emergency services hamesha chalu hain.'
       },
       {
         category: 'location',
@@ -359,6 +359,18 @@ export function initDb() {
     }
     console.log('Seeded default knowledge base (RAG)');
   }
+
+  // Force-update existing timings knowledge base row to make sure 24/7 timing is active
+  db.prepare(`
+    UPDATE knowledge_base 
+    SET answer_hi = ?, answer_en = ?, answer_hinglish = ?
+    WHERE category = 'timings'
+  `).run(
+    'वरदान हॉस्पिटल 24 घंटे और सातों दिन (24/7) खुला रहता है। बस डॉक्टरों की शिफ्ट समय-समय पर बदलती रहती है। आपातकालीन सेवाएं हमेशा उपलब्ध हैं।',
+    'Vardan Hospital is open 24/7. Only the doctors\' shifts change dynamically throughout the day. Emergency services are available round the clock.',
+    'Vardan Hospital 24/7 (24 ghante aur 7 din) khula rehta hai. Bas doctors ki shift change hoti rehti hai. Emergency services hamesha chalu hain.'
+  );
+  console.log('Updated existing timings knowledge base row to 24/7.');
 }
 
 export default db;
