@@ -634,24 +634,117 @@ JSON Schema:
     try {
       const parsedStr = await llmGateway.getChatCompletion('groq', {
         systemPrompt,
-        userPrompt: text
+        userPrompt: text,
+        responseFormatJson: true
       });
 
       let cleaned = parsedStr.trim();
-      if (cleaned.startsWith('```json')) {
-        cleaned = cleaned.replace(/^```json/, '').replace(/```$/, '').trim();
-      } else if (cleaned.startsWith('```')) {
-        cleaned = cleaned.replace(/^```/, '').replace(/```$/, '').trim();
+      if (cleaned.includes('```')) {
+        const match = cleaned.match(/```(?:json)?([\s\S]*?)```/);
+        if (match && match[1]) {
+          cleaned = match[1].trim();
+        }
       }
-      parsed = JSON.parse(cleaned);
-    } catch (err) {
-      console.error('[Registration LLM Parse] Failed:', err);
+      
+      try {
+        parsed = JSON.parse(cleaned);
+      } catch (e) {
+        const start = cleaned.indexOf('{');
+        const end = cleaned.lastIndexOf('}');
+        if (start !== -1 && end !== -1 && end > start) {
+          parsed = JSON.parse(cleaned.substring(start, end + 1));
+        } else {
+          throw e;
+        }
+      }
+    } catch (err: any) {
+      console.warn(`[Registration LLM Parse] JSON parse failed (${err.message || err}). Falling back to heuristics.`);
     }
 
-    const finalName = parsed.name ? parsed.name.trim() : null;
-    const finalAge = parsed.age ? Number(parsed.age) : null;
-    const finalGender = parsed.gender || 'Other';
-    const finalPhone = parsed.phone ? parsed.phone.replace(/\D/g, '') : phone;
+    // Heuristics Fallbacks for robust parsing:
+    const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+
+    // 1. Phone fallback
+    let phoneFallback: string | null = null;
+    const possiblePhoneMatch = text.match(/\b\d[\d\s-]{8,14}\d\b/);
+    if (possiblePhoneMatch) {
+      const cleanedPhone = possiblePhoneMatch[0].replace(/\D/g, '');
+      if (cleanedPhone.length >= 10 && cleanedPhone.length <= 15) {
+        phoneFallback = cleanedPhone;
+      }
+    }
+
+    // 2. Age fallback
+    let ageFallback: number | null = null;
+    const ageRegex = /\b(age\s*is?\s*)?(\d{1,3})\s*(years?|yrs?|yr|old|y\/o|साल|वर्ष)\b/i;
+    const ageMatch = text.match(ageRegex);
+    if (ageMatch) {
+      const val = Number(ageMatch[2]);
+      if (val > 0 && val <= 120) {
+        ageFallback = val;
+      }
+    } else {
+      // Find a standalone number in the lines or any 1-3 digit number that is not part of phone
+      for (const line of lines) {
+        const lineNum = Number(line.replace(/\D/g, ''));
+        if (!isNaN(lineNum) && lineNum > 0 && lineNum <= 120 && line.length <= 3) {
+          ageFallback = lineNum;
+          break;
+        }
+      }
+      if (!ageFallback) {
+        const numbers = text.match(/\b\d{1,3}\b/g);
+        if (numbers) {
+          for (const numStr of numbers) {
+            const val = Number(numStr);
+            if (val > 0 && val <= 120) {
+              if (phoneFallback && phoneFallback.includes(numStr)) continue;
+              if (phone && phone.includes(numStr)) continue;
+              ageFallback = val;
+              break;
+            }
+          }
+        }
+      }
+    }
+
+    // 3. Gender fallback
+    let genderFallback: 'Male' | 'Female' | 'Other' | null = null;
+    const lowerText = text.toLowerCase();
+    if (/\b(male|man|boy|m|पुरुष|आदमी|लड़का)\b/i.test(lowerText)) {
+      genderFallback = 'Male';
+    } else if (/\b(female|woman|girl|f|महिला|स्त्री|औरत|लड़की)\b/i.test(lowerText)) {
+      genderFallback = 'Female';
+    } else if (/\b(other|others|trans|transgender|तीसरा)\b/i.test(lowerText)) {
+      genderFallback = 'Other';
+    }
+
+    // 4. Name fallback
+    let nameFallback: string | null = null;
+    for (const line of lines) {
+      const hasDigits = /\d/.test(line);
+      const isGenderWord = /^(male|female|other|m|f|boy|girl|man|woman|पुरुष|महिला|अन्य|ok|yes|no)$/i.test(line);
+      if (!hasDigits && !isGenderWord && line.length > 2) {
+        nameFallback = line;
+        break;
+      }
+    }
+    if (!nameFallback) {
+      const parts = text.split(/[,，|;\-\n]/).map(p => p.trim()).filter(Boolean);
+      for (const part of parts) {
+        const hasDigits = /\d/.test(part);
+        const isGenderWord = /^(male|female|other|m|f|boy|girl|man|woman|पुरुष|महिला|अन्य|ok|yes|no)$/i.test(part);
+        if (!hasDigits && !isGenderWord && part.length > 2) {
+          nameFallback = part;
+          break;
+        }
+      }
+    }
+
+    const finalName = (parsed.name && parsed.name.trim()) ? parsed.name.trim() : (nameFallback ? nameFallback.trim() : null);
+    const finalAge = (parsed.age && !isNaN(Number(parsed.age))) ? Number(parsed.age) : ageFallback;
+    const finalGender = parsed.gender || genderFallback || 'Other';
+    const finalPhone = (parsed.phone && parsed.phone.replace(/\D/g, '')) ? parsed.phone.replace(/\D/g, '') : (phoneFallback || phone);
 
     if (!finalName || !finalAge || isNaN(finalAge) || finalAge <= 0 || finalAge > 120) {
       const invalidMsgs = {

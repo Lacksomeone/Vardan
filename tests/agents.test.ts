@@ -282,6 +282,76 @@ describe('Agent and Router Tests', () => {
       patient = db.prepare('SELECT * FROM patients WHERE id = ?').get(newPatientId) as any;
       assert.strictEqual(patient.preferred_language, 'hinglish');
     });
+
+    it('should parse multiline details format (like Nitin Singh: davis\\n12\\nmale\\n9451183429) using LLM or heuristics fallback', async () => {
+      const multilinePatientId = '919451183429@s.whatsapp.net';
+      clearRegSession(multilinePatientId);
+      db.prepare('DELETE FROM patients WHERE id = ?').run(multilinePatientId);
+
+      // Start registration
+      await handleIncomingMessage({
+        key: { remoteJid: multilinePatientId, id: 'm1' },
+        message: { conversation: 'hi' }
+      });
+
+      // Select Language (English)
+      await handleIncomingMessage({
+        key: { remoteJid: multilinePatientId, id: 'm2' },
+        message: { conversation: '2' }
+      });
+
+      // Mock LLM to return empty to force the heuristics fallback
+      llmMockResponse = '';
+
+      // Send multiline message
+      await handleIncomingMessage({
+        key: { remoteJid: multilinePatientId, id: 'm3' },
+        message: { conversation: 'davis\n12\nmale\n9451183429' }
+      });
+
+      // Verify registration succeeded via fallback heuristics
+      const patient = db.prepare('SELECT * FROM patients WHERE id = ?').get(multilinePatientId) as any;
+      assert.ok(patient, 'Patient should be registered in database');
+      assert.strictEqual(patient.name, 'davis');
+      assert.strictEqual(patient.age, 12);
+      assert.strictEqual(patient.gender, 'Male');
+      assert.strictEqual(patient.phone, '9451183429');
+    });
+
+    it('should parse comma-separated details format on a single line', async () => {
+      const commaPatientId = '919451183428@s.whatsapp.net';
+      clearRegSession(commaPatientId);
+      db.prepare('DELETE FROM patients WHERE id = ?').run(commaPatientId);
+
+      // Start registration
+      await handleIncomingMessage({
+        key: { remoteJid: commaPatientId, id: 'c1' },
+        message: { conversation: 'hi' }
+      });
+
+      // Select Language (English)
+      await handleIncomingMessage({
+        key: { remoteJid: commaPatientId, id: 'c2' },
+        message: { conversation: '2' }
+      });
+
+      // Mock LLM to fail
+      llmMockResponse = 'Failed completely';
+
+      // Send comma-separated single-line message
+      await handleIncomingMessage({
+        key: { remoteJid: commaPatientId, id: 'c3' },
+        message: { conversation: 'davis, 12, male, 9451183428' }
+      });
+
+      // Verify registration succeeded
+      const patient = db.prepare('SELECT * FROM patients WHERE id = ?').get(commaPatientId) as any;
+      assert.ok(patient, 'Patient should be registered in database');
+      assert.strictEqual(patient.name, 'davis');
+      assert.strictEqual(patient.age, 12);
+      assert.strictEqual(patient.gender, 'Male');
+      assert.strictEqual(patient.phone, '9451183428');
+    });
   });
 
   // ─── Booking Cancel Tests ─────────────────────────────────────────────────

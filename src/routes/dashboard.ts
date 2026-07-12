@@ -720,7 +720,7 @@ router.get('/monitor/status', authMiddleware, (req, res) => {
     { name: 'FAQ Agent', description: 'Answers queries using RAG Knowledge Base.', lastActive: lastFaq?.timestamp || 'Never', status: 'Active' },
     { name: 'Booking Agent', description: 'Schedules, reschedules, and cancels appointments.', lastActive: lastBooking?.timestamp || 'Never', status: 'Active' },
     { name: 'Follow-Up Agent', description: 'Schedules reminders, tracks medicine courses, and alerts doctors.', lastActive: lastFollowUp?.timestamp || 'Never', status: 'Active' },
-    { name: 'Programming Agent', description: 'Runs self-healing, unlocks database, resets cooldowns and runs AI diagnostics.', lastActive: lastLog?.timestamp || 'Never', status: 'Running' }
+    { name: 'System Monitor', description: 'Runs self-healing checks, checks database locks, and resets key cooldowns.', lastActive: lastLog?.timestamp || 'Never', status: 'Running' }
   ];
 
   // Fetch average latency and success rates from logs

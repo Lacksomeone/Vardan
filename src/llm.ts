@@ -156,6 +156,9 @@ export class LLMGateway {
       }
     });
 
+    // Prevent unhandled promise rejections for background / losing promises in the race
+    executionPromises.forEach(p => p.catch(() => {}));
+
     const preferredIndex = keysBatch.findIndex(k => k.provider === preferredProvider);
     
     if (preferredIndex !== -1) {
