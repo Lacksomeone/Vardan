@@ -145,8 +145,20 @@ function parseDateLocally(text: string): string | null {
     }
   }
 
-  // 6. Numeric formats: e.g. "13-07-2026", "13/07/26", "13.07", "13-7"
-  const datePartsMatch = clean.match(/(\d{1,2})[-/.](\d{1,2})([-/.](\d{2,4}))?/);
+  // 0. ISO/Standard format: e.g. "2026-07-13"
+  const isoMatch = clean.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (isoMatch) {
+    const y = parseInt(isoMatch[1], 10);
+    const m = parseInt(isoMatch[2], 10);
+    const d = parseInt(isoMatch[3], 10);
+    if (d >= 1 && d <= 31 && m >= 1 && m <= 12) {
+      const dateObj = new Date(Date.UTC(y, m - 1, d));
+      return dateObj.toISOString().split('T')[0];
+    }
+  }
+
+  // 6. Numeric formats: e.g. "13-07-2026", "13/07/26", "13.07", "13-7" (anchored to avoid partial match in YYYY-MM-DD)
+  const datePartsMatch = clean.match(/^(\d{1,2})[-/.](\d{1,2})([-/.](\d{2,4}))?$/);
   if (datePartsMatch) {
     const d = parseInt(datePartsMatch[1], 10);
     const m = parseInt(datePartsMatch[2], 10);
@@ -278,9 +290,118 @@ export async function handleBookingQuery(patientId: string, text: string, lang: 
       return;
     }
 
-    // Default: Start booking flow
-    bookingSessions[patientId] = { stage: 'doctor_or_symptom', action: 'book' };
+    // Default: Start booking flow (with pre-extraction)
+    let preExtractedDocId: number | null = null;
+    let preExtractedDate: string | null = null;
+    let preExtractedRelation: string | null = null;
 
+    try {
+      const doctors = db.prepare('SELECT * FROM doctors WHERE active = 1').all() as any[];
+      if (doctors.length > 0) {
+        const docListStr = doctors.map(d => `${d.id}: Dr. ${d.name} (${d.department})`).join('\n');
+        const systemPrompt = `You are a smart booking receptionist for Vardan Hospital.
+We have the following doctors currently active:
+${docListStr}
+
+Analyze the patient's incoming booking request: "${text}"
+And extract details:
+1. "doctorId": Match to the best suited Doctor ID if they mention a doctor name or a matching symptom (e.g., child -> Pediatrics/Dr. Om Shukla, heart/chest -> Cardiology/Dr. Nitin Singh, fever/cough -> General Medicine/Dr. Ankit Sharma). Else set to null.
+2. "date": The raw date string mentioned (e.g., "tomorrow", "kal", "15 July", "Monday") or null if not mentioned.
+3. "relation": Who the appointment is for (e.g., "mother", "father", "son", "myself") or null.
+
+Format your output as a strict JSON object matching this schema:
+{
+  "doctorId": number | null,
+  "date": string | null,
+  "relation": string | null
+}`;
+
+        const responseStr = await LLMGateway.getInstance().getChatCompletion('openrouter', {
+          systemPrompt,
+          userPrompt: text,
+          responseFormatJson: true
+        });
+
+        let cleaned = responseStr.trim();
+        if (cleaned.includes('```')) {
+          const match = cleaned.match(/```(?:json)?([\s\S]*?)```/);
+          if (match && match[1]) {
+            cleaned = match[1].trim();
+          }
+        }
+        const parsed = JSON.parse(cleaned) as { doctorId: number | null; date: string | null; relation: string | null };
+        if (parsed.doctorId) {
+          preExtractedDocId = Number(parsed.doctorId);
+        }
+        if (parsed.date) {
+          const resolved = await parseDateWithLLM(parsed.date);
+          if (resolved) {
+            preExtractedDate = resolved;
+          }
+        }
+        if (parsed.relation) {
+          preExtractedRelation = parsed.relation;
+        }
+      }
+    } catch (err) {
+      console.error('[Booking Pre-extraction] failed:', err);
+    }
+
+    bookingSessions[patientId] = {
+      stage: 'doctor_or_symptom',
+      action: 'book',
+      doctorId: preExtractedDocId || undefined,
+      date: preExtractedDate || undefined,
+      patientRelation: preExtractedRelation || undefined
+    };
+    session = bookingSessions[patientId];
+
+    // Now evaluate and dynamically route or prompt
+    if (session.doctorId && session.date) {
+      const todayStr = new Date().toISOString().split('T')[0];
+      if (session.date >= todayStr) {
+        const slots = getAvailableSlots(session.doctorId, session.date);
+        if (slots.length > 0) {
+          session.stage = 'slot';
+          const doctor = db.prepare('SELECT * FROM doctors WHERE id = ?').get(session.doctorId) as any;
+          const slotList = slots.map((s, i) => `${i + 1}. ${s}`).join('\n');
+          const relationStr = session.patientRelation ? ` (for your ${session.patientRelation})` : '';
+          
+          const slotPrompt = {
+            hi: `✅ हमने आपके अनुरोध को समझ लिया है। आप **${doctor.name}** के साथ **${session.date}**${relationStr} का अपॉइंटमेंट बुक कर रहे हैं।\n\nउपलब्ध समय:\n${slotList}\n\nकृपया समय चुनें (जैसे: 10:00-10:30 या संख्या 1, 2 लिखें)।`,
+            hinglish: `✅ Humne aapka request samajh liya hai. Aap **${doctor.name}** ke sath **${session.date}**${relationStr} ka appointment book kar rahe hain.\n\nAvailable slots:\n${slotList}\n\nKripya time slot select karein (e.g. 10:00-10:30 ya number 1, 2 likhein).`,
+            en: `✅ We understood your request. Booking an appointment with **${doctor.name}** on **${session.date}**${relationStr}.\n\nAvailable slots:\n${slotList}\n\nPlease select a time slot (e.g. 10:00-10:30 or write number 1, 2).`
+          };
+          await sendTextMessage(patientId, slotPrompt[lang]);
+          return;
+        }
+      }
+    }
+
+    if (session.doctorId && !session.date) {
+      session.stage = 'date';
+      const doctor = db.prepare('SELECT * FROM doctors WHERE id = ?').get(session.doctorId) as any;
+      const datePrompt = {
+        hi: `ठीक है, आप **${doctor.name}** के साथ अपॉइंटमेंट बुक करना चाहते हैं। कृपया दिनांक (तारीख या दिन) बताएं (जैसे: कल, या 13 July)।`,
+        hinglish: `Okay, aap **${doctor.name}** ke sath appointment book karna chahte hain. Kripya date (tarikh ya day) batayein (e.g. kal, ya 13 July).`,
+        en: `Okay, you want to book an appointment with **${doctor.name}**. Please specify the date (e.g., tomorrow, or 13 July).`
+      };
+      await sendTextMessage(patientId, datePrompt[lang]);
+      return;
+    }
+
+    if (!session.doctorId && session.date) {
+      session.stage = 'doctor_or_symptom';
+      const docPrompt = {
+        hi: `ठीक है, आप **${session.date}** के लिए अपॉइंटमेंट बुक करना चाहते हैं। कृपया डॉक्टर का नाम बताएं या अपनी बीमारी/लक्षण बताएं (जैसे: बुखार, सीने में दर्द)।`,
+        hinglish: `Okay, aap **${session.date}** ke liye appointment book karna chahte hain. Kripya doctor ka naam batayein ya apni problem/symptom batayein (e.g. fever, chest pain).`,
+        en: `Okay, you want to book an appointment on **${session.date}**. Please specify the doctor's name or describe your symptoms (e.g. fever, chest pain).`
+      };
+      await sendTextMessage(patientId, docPrompt[lang]);
+      return;
+    }
+
+    // Default flow when neither doctor nor date is pre-extracted
     const promptMsgs = {
       hi: 'वरदान हॉस्पिटल में अपॉइंटमेंट बुक करने के लिए, कृपया डॉक्टर का नाम बताएं (जैसे Dr. Nitin Singh) या अपनी बीमारी/लक्षण बताएं (जैसे: सीने में दर्द, बुखार)।',
       hinglish: 'Vardan Hospital me appointment book karne ke liye, kripya doctor ka naam batayein (e.g. Dr. Nitin Singh) ya apni problem/symptom batayein (e.g. chest pain, fever).',

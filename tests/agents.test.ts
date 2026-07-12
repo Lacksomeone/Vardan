@@ -179,6 +179,32 @@ describe('Agent and Router Tests', () => {
       // Booking session should be cleared after auto-booking
       assert.strictEqual(hasActiveBookingSession(patientId), false, 'Session should be cleared after auto-booking');
     });
+
+    it('should pre-extract doctor and date from initial query and go directly to slot selection', async () => {
+      clearBookingSession(patientId);
+      db.prepare('DELETE FROM appointments').run();
+
+      // Mock LLM smart extraction response
+      llmMockResponse = JSON.stringify({
+        doctorId: 1, // Dr. Nitin Singh
+        date: '2026-07-13',
+        relation: 'mother'
+      });
+
+      // Send initial free-form booking message
+      await handleBookingQuery(patientId, 'I want to book an appointment with Dr. Nitin Singh for my mother tomorrow', 'en');
+
+      // If we are directly at slot selection stage, sending slot number "1" should confirm and book the appointment!
+      await handleBookingQuery(patientId, '1', 'en');
+
+      // Verify appointment is created in DB
+      const appointment = db.prepare('SELECT * FROM appointments WHERE patient_id = ?').get(patientId) as any;
+      assert.ok(appointment, 'Appointment should be saved via smart pre-extracted parameters');
+      assert.strictEqual(appointment.doctor_id, 1);
+      assert.strictEqual(appointment.date, '2026-07-13');
+      assert.strictEqual(appointment.time_slot, '10:00-10:30');
+      assert.strictEqual(appointment.status, 'confirmed');
+    });
   });
 
   // ─── Follow-Up Agent Tests ─────────────────────────────────────────────────
