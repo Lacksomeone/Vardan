@@ -204,21 +204,16 @@ export async function sendTextMessage(toJid: string, text: string) {
   
   let jid = toJid;
   
-  // Convert @lid (WhatsApp Multi-Device internal format) to @s.whatsapp.net
-  if (jid.endsWith('@lid')) {
-    const numericPart = jid.replace('@lid', '');
-    jid = `${numericPart}@s.whatsapp.net`;
-    console.log(`[WhatsApp] Converted @lid JID: ${toJid} → ${jid}`);
-  }
-  
-  // Append @s.whatsapp.net if no domain suffix
-  if (!jid.includes('@')) {
-    jid = `${jid}@s.whatsapp.net`;
-  }
-  
-  // Strip leading + (e.g., +919451183429)
-  if (jid.startsWith('+')) {
-    jid = jid.substring(1);
+  // @lid JIDs must stay as @lid - Baileys resolves them internally
+  // DO NOT convert @lid to @s.whatsapp.net (the LID number ≠ phone number)
+  if (!jid.endsWith('@lid')) {
+    // Only modify non-@lid JIDs
+    if (!jid.includes('@')) {
+      jid = `${jid}@s.whatsapp.net`;
+    }
+    if (jid.startsWith('+')) {
+      jid = jid.substring(1);
+    }
   }
 
   console.log(`[WhatsApp] 📤 Sending message to: ${jid}`);

@@ -139,14 +139,8 @@ function classifyHeuristically(text: string): 'booking' | 'faq' | 'followup' | '
 }
 
 export async function handleIncomingMessage(msg: proto.IWebMessageInfo) {
-  let patientId = msg.key.remoteJid;
+  const patientId = msg.key.remoteJid;
   if (!patientId) return;
-
-  // Normalize @lid JID (WhatsApp Multi-Device) to standard @s.whatsapp.net format
-  if (patientId.endsWith('@lid')) {
-    patientId = patientId.replace('@lid', '@s.whatsapp.net');
-    console.log(`[Router] Normalized @lid JID → ${patientId}`);
-  }
 
   console.log(`[Router] 🔄 Processing message from: ${patientId}`);
 
@@ -874,7 +868,9 @@ JSON Schema:
       return;
     }
 
-    if (finalPhone.length < 10 || finalPhone.length > 15) {
+    // Skip phone length validation for @lid JIDs (LID number != standard phone number)
+    const isLidJid = patientId.endsWith('@lid');
+    if (!isLidJid && (finalPhone.length < 10 || finalPhone.length > 15)) {
       const invalidPhoneMsgs = {
         hi: 'कृपया एक सही 10-अंकों का फ़ोन नंबर लिखकर भेजें (जैसे: 9876543210)।',
         hinglish: 'Kripya ek sahi 10-digit phone number likhkar bhejein (e.g. 9876543210).',
