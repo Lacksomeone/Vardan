@@ -1,5 +1,4 @@
-// @ts-ignore
-import { DatabaseSync } from 'node:sqlite';
+import { createClient } from '@libsql/client';
 import path from 'path';
 import fs from 'fs';
 import bcrypt from 'bcryptjs';
@@ -7,21 +6,63 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
-// Ensure data directory exists
-const dataDir = path.resolve('data');
-if (!fs.existsSync(dataDir)) {
-  fs.mkdirSync(dataDir, { recursive: true });
+// Ensure data directory exists if using local file fallback
+if (!process.env.TURSO_DATABASE_URL) {
+  const dataDir = path.resolve('data');
+  if (!fs.existsSync(dataDir)) {
+    fs.mkdirSync(dataDir, { recursive: true });
+  }
 }
 
-const dbPath = path.join(dataDir, process.env.NODE_ENV === 'test' ? 'test_vardan.db' : 'vardan.db');
-const db = new DatabaseSync(dbPath);
+const url = process.env.TURSO_DATABASE_URL || (process.env.NODE_ENV === 'test' ? 'file:data/test_vardan.db' : 'file:data/vardan.db');
+const authToken = process.env.TURSO_AUTH_TOKEN;
 
-// Enable WAL mode for performance
-db.exec('PRAGMA journal_mode = WAL');
+const client = createClient({
+  url,
+  authToken
+});
 
-export function initDb() {
+// A wrapper to mimic the synchronous node:sqlite API structure but with async methods
+const dbWrapper = {
+  execute: (sql: string) => client.execute(sql),
+  executeMultiple: (sql: string) => client.executeMultiple(sql),
+  prepare: (sql: string) => {
+    return {
+      get: async (...args: any[]) => {
+        const res = await client.execute({ sql, args });
+        return res.rows[0];
+      },
+      all: async (...args: any[]) => {
+        const res = await client.execute({ sql, args });
+        return res.rows;
+      },
+      run: async (...args: any[]) => {
+        const res = await client.execute({ sql, args });
+        return { lastInsertRowid: res.lastInsertRowid, changes: res.rowsAffected };
+      }
+    };
+  },
+  exec: async (sql: string) => {
+    // For exec, split by ';' to handle multiple statements if executeMultiple isn't perfect for pragma
+    if (sql.toLowerCase().includes('pragma ')) {
+      await client.execute(sql);
+    } else {
+      await client.executeMultiple(sql);
+    }
+  }
+};
+
+export async function initDb() {
+  if (url.startsWith('file:')) {
+    try {
+      await dbWrapper.exec('PRAGMA journal_mode = WAL');
+    } catch (e) {
+      console.log('WAL mode not supported or already set.');
+    }
+  }
+
   // Create tables
-  db.exec(`
+  await dbWrapper.exec(`
     CREATE TABLE IF NOT EXISTS patients (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
@@ -48,24 +89,14 @@ export function initDb() {
   `);
 
   // Migrate existing databases to add columns if they do not exist
-  try {
-    db.exec('ALTER TABLE doctors ADD COLUMN details TEXT;');
-  } catch (e) {}
-  try {
-    db.exec('ALTER TABLE doctors ADD COLUMN photo_url TEXT;');
-  } catch (e) {}
-  try {
-    db.exec('ALTER TABLE doctors ADD COLUMN services TEXT;');
-  } catch (e) {}
-  try {
-    db.exec('ALTER TABLE doctors ADD COLUMN active INTEGER DEFAULT 1;');
-  } catch (e) {}
-  try {
-    db.exec('UPDATE doctors SET active = 1 WHERE active IS NULL;');
-  } catch (e) {}
+  try { await client.execute('ALTER TABLE doctors ADD COLUMN details TEXT;'); } catch (e) {}
+  try { await client.execute('ALTER TABLE doctors ADD COLUMN photo_url TEXT;'); } catch (e) {}
+  try { await client.execute('ALTER TABLE doctors ADD COLUMN services TEXT;'); } catch (e) {}
+  try { await client.execute('ALTER TABLE doctors ADD COLUMN active INTEGER DEFAULT 1;'); } catch (e) {}
+  try { await client.execute('UPDATE doctors SET active = 1 WHERE active IS NULL;'); } catch (e) {}
 
   // Doctor documents table for categorized file uploads
-  db.exec(`
+  await dbWrapper.exec(`
     CREATE TABLE IF NOT EXISTS doctor_documents (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       doctor_id INTEGER NOT NULL,
@@ -78,11 +109,11 @@ export function initDb() {
   `);
 
   // Index for fast doctor document lookups
-  db.exec(`
+  await dbWrapper.exec(`
     CREATE INDEX IF NOT EXISTS idx_doctor_documents_doctor ON doctor_documents(doctor_id);
   `);
 
-  db.exec(`
+  await dbWrapper.exec(`
     CREATE TABLE IF NOT EXISTS appointments (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       patient_id TEXT NOT NULL,
@@ -121,7 +152,7 @@ export function initDb() {
     CREATE TABLE IF NOT EXISTS knowledge_base (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       category TEXT NOT NULL,
-      question_variants TEXT NOT NULL, -- JSON array of variants
+      question_variants TEXT NOT NULL,
       answer_hi TEXT NOT NULL,
       answer_en TEXT NOT NULL,
       answer_hinglish TEXT NOT NULL,
@@ -166,10 +197,15 @@ export function initDb() {
       password_hash TEXT NOT NULL,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
+    
+    CREATE TABLE IF NOT EXISTS whatsapp_auth (
+      id TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
   `);
 
   // Create Indexes for performance
-  db.exec(`
+  await dbWrapper.exec(`
     CREATE INDEX IF NOT EXISTS idx_conversations_patient ON conversations(patient_id);
     CREATE INDEX IF NOT EXISTS idx_appointments_doctor_date ON appointments(doctor_id, date);
     CREATE INDEX IF NOT EXISTS idx_follow_up_jobs_status_trigger ON follow_up_jobs(status, trigger_date);
@@ -178,25 +214,25 @@ export function initDb() {
   // Seed / update default admin user credentials (username: vardan, password: hospital)
   const salt = bcrypt.genSaltSync(10);
   const hash = bcrypt.hashSync('hospital', salt);
-  const vardanUser = db.prepare('SELECT * FROM admin_users WHERE username = ?').get('vardan');
+  const vardanUser = await dbWrapper.prepare('SELECT * FROM admin_users WHERE username = ?').get('vardan');
   if (!vardanUser) {
-    const oldAdmin = db.prepare("SELECT * FROM admin_users WHERE username = 'admin'").get();
+    const oldAdmin = await dbWrapper.prepare("SELECT * FROM admin_users WHERE username = 'admin'").get();
     if (oldAdmin) {
-      db.prepare(`
+      await dbWrapper.prepare(`
         UPDATE admin_users
         SET username = ?, password_hash = ?
         WHERE username = 'admin'
       `).run('vardan', hash);
       console.log("Updated existing admin user credentials to username: 'vardan', password: 'hospital'");
     } else {
-      db.prepare(`
+      await dbWrapper.prepare(`
         INSERT INTO admin_users (name, username, role, password_hash)
         VALUES (?, ?, ?, ?)
       `).run('Vardan Owner', 'vardan', 'owner', hash);
       console.log("Created default admin user credentials with username: 'vardan', password: 'hospital'");
     }
   } else {
-    db.prepare(`
+    await dbWrapper.prepare(`
       UPDATE admin_users
       SET password_hash = ?
       WHERE username = 'vardan'
@@ -205,7 +241,7 @@ export function initDb() {
   }
 
   // Seed default doctors if empty
-  const docCount = db.prepare('SELECT COUNT(*) as count FROM doctors').get() as { count: number };
+  const docCount = (await dbWrapper.prepare('SELECT COUNT(*) as count FROM doctors').get()) as any;
   if (docCount.count === 0) {
     const doctors = [
       {
@@ -261,74 +297,61 @@ export function initDb() {
       }
     ];
 
-    const stmt = db.prepare(`
-      INSERT INTO doctors (name, department, phone, weekly_schedule_json, fee, details, photo_url, services)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-
     for (const doc of doctors) {
-      stmt.run(doc.name, doc.department, doc.phone, doc.weekly_schedule, doc.fee, doc.details, doc.photo_url, doc.services);
+      await dbWrapper.prepare(`
+        INSERT INTO doctors (name, department, phone, weekly_schedule_json, fee, details, photo_url, services)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(doc.name, doc.department, doc.phone, doc.weekly_schedule, doc.fee, doc.details, doc.photo_url, doc.services);
     }
     console.log('Seeded default doctors list');
   } else {
-    // Populate details, photo_url, services if they are currently null in existing DB
     try {
-      db.prepare(`UPDATE doctors SET details = ?, photo_url = ?, services = ? WHERE name = ? AND details IS NULL`).run(
+      await dbWrapper.prepare(`UPDATE doctors SET details = ?, photo_url = ?, services = ? WHERE name = ? AND details IS NULL`).run(
         'Specialist Cardiologist with 10+ years experience in heart surgeries, cardiovascular health, and pacemaker implantation.',
         'https://images.unsplash.com/photo-1612349317150-e413f6a5b16d?w=250&h=250&fit=crop',
         'ECG, Echo, Angiography, BP Management, Heart Checkup',
         'Dr. Nitin Singh'
       );
-      db.prepare(`UPDATE doctors SET details = ?, photo_url = ?, services = ? WHERE name = ? AND details IS NULL`).run(
+      await dbWrapper.prepare(`UPDATE doctors SET details = ?, photo_url = ?, services = ? WHERE name = ? AND details IS NULL`).run(
         'General Physician with expertise in family medicine, treating viral fevers, chronic illnesses, diabetes, and general health consultation.',
         'https://images.unsplash.com/photo-1622253692010-333f2da6031d?w=250&h=250&fit=crop',
         'General OPD, Diabetes Care, Hypertension Management, Vaccination',
         'Dr. Ankit Sharma'
       );
-      db.prepare(`UPDATE doctors SET details = ?, photo_url = ?, services = ? WHERE name = ? AND details IS NULL`).run(
+      await dbWrapper.prepare(`UPDATE doctors SET details = ?, photo_url = ?, services = ? WHERE name = ? AND details IS NULL`).run(
         'Dedicated Pediatrician specializing in newborn care, childhood nutrition, child development, vaccinations, and pediatric illnesses.',
         'https://images.unsplash.com/photo-1594824813573-246434de83fb?w=250&h=250&fit=crop',
         'Newborn Checkup, Child Vaccination, Growth Monitoring, Pediatric OPD',
         'Dr. Om Shukla'
       );
-      console.log('Updated existing doctors list with details, photo and services.');
-    } catch (e) {
-      console.error('Failed to update existing doctors columns:', e);
-    }
+    } catch (e) {}
   }
 
-
-  // Deactivate all existing keys first so that only current keys from env will be active
   try {
-    db.exec(`UPDATE llm_keys SET key_val = trim(replace(replace(key_val, char(13), ''), char(10), ''))`);
-    db.exec('UPDATE llm_keys SET active = 0');
-    console.log('Deactivated older keys in DB for clean refresh');
+    await dbWrapper.exec(`UPDATE llm_keys SET key_val = trim(replace(replace(key_val, char(13), ''), char(10), ''))`);
+    await dbWrapper.exec('UPDATE llm_keys SET active = 0');
   } catch (e) {}
 
-  // Seed LLM Keys from Env to DB (both comma-separated and individual formats supported!)
   const providers = ['groq', 'gemini', 'openrouter'];
   for (const prov of providers) {
-    // 1. Check comma-separated variable first, e.g. GROQ_KEYS
     const csvKeys = process.env[`${prov.toUpperCase()}_KEYS`];
     if (csvKeys) {
       const keysList = csvKeys.split(',').map(k => k.trim()).filter(Boolean);
       for (const val of keysList) {
         const cleanVal = val.trim().replace(/[\r\n]/g, '');
-        db.prepare(`
+        await dbWrapper.prepare(`
           INSERT INTO llm_keys (provider, key_val)
           VALUES (?, ?)
           ON CONFLICT(key_val) DO UPDATE SET active = 1
         `).run(prov, cleanVal);
       }
-      console.log(`Seeded ${keysList.length} ${prov} keys from comma-separated list`);
     } else {
-      // 2. Fallback to individual variables, e.g. GROQ_KEY_1 ... GROQ_KEY_12
       for (let i = 1; i <= 12; i++) {
         const keyName = `${prov.toUpperCase()}_KEY_${i}`;
         const keyVal = process.env[keyName];
         if (keyVal) {
           const cleanKeyVal = keyVal.trim().replace(/[\r\n]/g, '');
-          db.prepare(`
+          await dbWrapper.prepare(`
             INSERT INTO llm_keys (provider, key_val)
             VALUES (?, ?)
             ON CONFLICT(key_val) DO UPDATE SET active = 1
@@ -338,8 +361,7 @@ export function initDb() {
     }
   }
 
-  // Seed default knowledge base entries
-  const kbCount = db.prepare('SELECT COUNT(*) as count FROM knowledge_base').get() as { count: number };
+  const kbCount = (await dbWrapper.prepare('SELECT COUNT(*) as count FROM knowledge_base').get()) as any;
   if (kbCount.count === 0) {
     const kbEntries = [
       {
@@ -382,19 +404,15 @@ export function initDb() {
       }
     ];
 
-    const kbStmt = db.prepare(`
-      INSERT INTO knowledge_base (category, question_variants, answer_hi, answer_en, answer_hinglish)
-      VALUES (?, ?, ?, ?, ?)
-    `);
-
     for (const kb of kbEntries) {
-      kbStmt.run(kb.category, kb.question_variants, kb.answer_hi, kb.answer_en, kb.answer_hinglish);
+      await dbWrapper.prepare(`
+        INSERT INTO knowledge_base (category, question_variants, answer_hi, answer_en, answer_hinglish)
+        VALUES (?, ?, ?, ?, ?)
+      `).run(kb.category, kb.question_variants, kb.answer_hi, kb.answer_en, kb.answer_hinglish);
     }
-    console.log('Seeded default knowledge base (RAG)');
   }
 
-  // Force-update existing timings knowledge base row to make sure 24/7 timing is active
-  db.prepare(`
+  await dbWrapper.prepare(`
     UPDATE knowledge_base 
     SET answer_hi = ?, answer_en = ?, answer_hinglish = ?
     WHERE category = 'timings'
@@ -403,7 +421,6 @@ export function initDb() {
     'Vardan Hospital is open 24/7. Only the doctors\' shifts change dynamically throughout the day. Emergency services are available round the clock.',
     'Vardan Hospital 24/7 (24 ghante aur 7 din) khula rehta hai. Bas doctors ki shift change hoti rehti hai. Emergency services hamesha chalu hain.'
   );
-  console.log('Updated existing timings knowledge base row to 24/7.');
 }
 
-export default db;
+export default dbWrapper;

@@ -13,6 +13,7 @@ import fs from 'fs';
 import pino from 'pino';
 import { handleIncomingMessage } from './router.js';
 import db from './db.js';
+import { useDatabaseAuthState } from './whatsappAuth.js';
 
 const logger = pino({ level: 'silent' });
 
@@ -76,8 +77,8 @@ export async function connectToWhatsApp() {
     const { version } = await fetchLatestBaileysVersion();
     console.log(`[WhatsApp] Using Baileys v${version.join('.')}`);
 
-    // 3. Load auth state
-    const { state, saveCreds } = await useMultiFileAuthState(authDir);
+    // 3. Load auth state from Database
+    const { state, saveCreds } = await useDatabaseAuthState();
 
     connectionStatus = 'connecting';
     lastError = null;
@@ -134,9 +135,9 @@ export async function connectToWhatsApp() {
         console.log('[WhatsApp] Connection closed, status:', statusCode);
 
         if (statusCode === DisconnectReason.loggedOut) {
-          console.log('[WhatsApp] Logged out — clearing auth...');
+          console.log('[WhatsApp] Logged out — clearing auth from DB...');
           lastError = 'Logged out. Please reconnect.';
-          try { fs.rmSync(authDir, { recursive: true, force: true }); } catch (_) {}
+          try { await db.execute('DELETE FROM whatsapp_auth'); } catch (e) { console.error('Error clearing auth:', e); }
           setTimeout(connectToWhatsApp, 3000);
         } else {
           setTimeout(connectToWhatsApp, 5000);
@@ -227,16 +228,16 @@ export async function sendTextMessage(toJid: string, text: string) {
 
   // Log outgoing message to conversations table if recipient is a patient
   try {
-    const patient = db.prepare('SELECT preferred_language FROM patients WHERE id = ?').get(jid) as { preferred_language: string } | undefined;
+    const patient = (await db.prepare('SELECT preferred_language FROM patients WHERE id = ?').get(jid)) as any as { preferred_language: string } | undefined;
     if (patient) {
       // Check if this exact message was logged in the last 2 seconds to avoid duplicates from other agents
-      const recent = db.prepare(`
+      const recent = await db.prepare(`
         SELECT id FROM conversations 
         WHERE patient_id = ? AND role = 'bot' AND message = ? AND timestamp >= datetime('now', '-2 seconds')
       `).get(jid, text);
       
       if (!recent) {
-        db.prepare(`
+        await db.prepare(`
           INSERT INTO conversations (patient_id, role, message, agent_used, language)
           VALUES (?, 'bot', ?, 'booking', ?)
         `).run(jid, text, patient.preferred_language);
@@ -258,9 +259,8 @@ export async function restartWhatsApp(phone?: string) {
   qrCodeStr = null;
   pairingCode = null;
   connectionStatus = 'disconnected';
-  // Clear old auth to get fresh QR/pairing code
-  const authDir = path.resolve('data/auth_info_baileys');
-  try { fs.rmSync(authDir, { recursive: true, force: true }); } catch (_) {}
+  // Clear old auth from DB to get fresh QR/pairing code
+  try { await db.execute('DELETE FROM whatsapp_auth'); } catch (e) { console.error('Error clearing auth on restart:', e); }
   await connectToWhatsApp();
 }
 
@@ -299,10 +299,10 @@ export async function sendImageMessage(toJid: string, imageUrl: string, caption?
 
   // Log outgoing message to conversations table if recipient is a patient
   try {
-    const patient = db.prepare('SELECT preferred_language FROM patients WHERE id = ?').get(jid) as { preferred_language: string } | undefined;
+    const patient = (await db.prepare('SELECT preferred_language FROM patients WHERE id = ?').get(jid)) as any as { preferred_language: string } | undefined;
     if (patient) {
       const logText = caption ? `[Photo Sent] ${caption}` : '[Photo Sent]';
-      db.prepare(`
+      await db.prepare(`
         INSERT INTO conversations (patient_id, role, message, agent_used, language)
         VALUES (?, 'bot', ?, 'bulk_sender', ?)
       `).run(jid, logText, patient.preferred_language);

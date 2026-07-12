@@ -26,7 +26,7 @@ export async function handleFaqQuery(patientId: string, query: string, lang: 'hi
     };
     const reply = medicalRedirect[lang];
     
-    db.prepare(`
+    await db.prepare(`
       INSERT INTO conversations (patient_id, role, message, agent_used, language)
       VALUES (?, ?, ?, ?, ?)
     `).run(patientId, 'bot', reply, 'faq', lang);
@@ -36,7 +36,7 @@ export async function handleFaqQuery(patientId: string, query: string, lang: 'hi
   }
 
   // 2. Query Knowledge Base
-  const kbEntries = db.prepare('SELECT * FROM knowledge_base').all() as any[];
+  const kbEntries = await db.prepare('SELECT * FROM knowledge_base').all() as any[];
   let matchedEntry: any = null;
 
   // Search for keyword matches in question variants
@@ -92,7 +92,7 @@ You must return a valid JSON object matching one of the two formats. Do not incl
 
     if (parsedResult.can_answer && parsedResult.answer) {
       const reply = parsedResult.answer;
-      db.prepare(`
+      await db.prepare(`
         INSERT INTO conversations (patient_id, role, message, agent_used, language)
         VALUES (?, 'bot', ?, 'faq', ?)
       `).run(patientId, reply, lang);
@@ -102,7 +102,7 @@ You must return a valid JSON object matching one of the two formats. Do not incl
     }
 
     // Otherwise, escalate to pending_queries
-    db.prepare(`
+    await db.prepare(`
       INSERT INTO pending_queries (patient_id, question)
       VALUES (?, ?)
     `).run(patientId, query);
@@ -114,7 +114,7 @@ You must return a valid JSON object matching one of the two formats. Do not incl
     };
     const reply = fallbackRedirect[lang];
 
-    db.prepare(`
+    await db.prepare(`
       INSERT INTO conversations (patient_id, role, message, agent_used, language)
       VALUES (?, 'bot', ?, 'faq', ?)
     `).run(patientId, reply, lang);
@@ -158,7 +158,7 @@ INSTRUCTION:
       userPrompt: query
     });
 
-    db.prepare(`
+    await db.prepare(`
       INSERT INTO conversations (patient_id, role, message, agent_used, language)
       VALUES (?, ?, ?, ?, ?)
     `).run(patientId, 'bot', reply, 'faq', lang);
@@ -167,7 +167,7 @@ INSTRUCTION:
   } catch (err) {
     console.error('FAQ Gemini call failed, sending raw DB answer:', err);
     // Fallback: Send raw DB answer if LLM fails
-    db.prepare(`
+    await db.prepare(`
       INSERT INTO conversations (patient_id, role, message, agent_used, language)
       VALUES (?, ?, ?, ?, ?)
     `).run(patientId, 'bot', baseAnswer, 'faq', lang);
@@ -178,19 +178,19 @@ INSTRUCTION:
 
 // Auto-resolve pending queries using AI
 export async function autoResolvePendingQueries() {
-  const pending = db.prepare("SELECT * FROM pending_queries WHERE status = 'pending'").all() as any[];
+  const pending = await db.prepare("SELECT * FROM pending_queries WHERE status = 'pending'").all() as any[];
   if (pending.length === 0) return;
 
   console.log(`[FAQ] Found ${pending.length} pending queries to auto-resolve...`);
 
-  const kbEntries = db.prepare('SELECT * FROM knowledge_base').all() as any[];
+  const kbEntries = await db.prepare('SELECT * FROM knowledge_base').all() as any[];
   const kbText = kbEntries.map(e => `Category: ${e.category}\nFAQ Hindi: ${e.answer_hi}\nFAQ Hinglish: ${e.answer_hinglish}\nFAQ English: ${e.answer_en}`).join('\n\n');
 
   const llmGateway = LLMGateway.getInstance();
 
   for (const q of pending) {
     // Get patient language
-    const patient = db.prepare('SELECT preferred_language FROM patients WHERE id = ?').get(q.patient_id) as any;
+    const patient = await db.prepare('SELECT preferred_language FROM patients WHERE id = ?').get(q.patient_id) as any;
     const lang = patient?.preferred_language || 'hinglish';
 
     const fallbackSystemPrompt = `You are the FAQ reception bot for Vardan Hospital.
@@ -227,13 +227,13 @@ You must return a valid JSON object matching one of the two formats. Do not incl
         // Manual transaction to mark resolved
         db.exec('BEGIN TRANSACTION');
         try {
-          db.prepare(`
+          await db.prepare(`
             UPDATE pending_queries 
             SET status = 'resolved', answered_by = 'ai_auto_resolver', answer = ? 
             WHERE id = ?
           `).run(reply, q.id);
 
-          db.prepare(`
+          await db.prepare(`
             INSERT INTO conversations (patient_id, role, message, agent_used, language)
             VALUES (?, 'bot', ?, 'faq_auto_resolver', ?)
           `).run(q.patient_id, reply, lang);

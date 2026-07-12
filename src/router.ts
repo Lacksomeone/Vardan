@@ -164,7 +164,7 @@ export async function handleIncomingMessage(msg: proto.IWebMessageInfo) {
           isVoice = true;
         } else {
           console.log(`[WhatsApp Voice Transcribe] Empty transcript returned for audio message`);
-          const patient = db.prepare('SELECT preferred_language FROM patients WHERE id = ?').get(patientId) as any;
+          const patient = await db.prepare('SELECT preferred_language FROM patients WHERE id = ?').get(patientId) as any;
           const lang = patient ? patient.preferred_language : 'hi';
           const cantUnderstand = {
             hi: '🎤 क्षमा करें, मैं आपके वॉयस मैसेज की आवाज़ नहीं समझ सका। कृपया टाइप करके भेजें या फिर से स्पष्ट वॉयस मैसेज भेजें।',
@@ -187,7 +187,7 @@ export async function handleIncomingMessage(msg: proto.IWebMessageInfo) {
 
   // ─── Image / Prescription Analysis Flow ───
   if (imageMsg) {
-    const patient = db.prepare('SELECT * FROM patients WHERE id = ?').get(patientId) as any;
+    const patient = await db.prepare('SELECT * FROM patients WHERE id = ?').get(patientId) as any;
     if (!patient) {
       // Try to automatically register patient via OCR
       try {
@@ -253,9 +253,9 @@ JSON Schema:
             const lang = 'hinglish'; // Default language for auto-registration
 
             // Check if phone number already exists
-            const exists = db.prepare('SELECT id FROM patients WHERE phone = ?').get(finalPhone);
+            const exists = await db.prepare('SELECT id FROM patients WHERE phone = ?').get(finalPhone);
             if (!exists) {
-              db.prepare(`
+              await db.prepare(`
                 INSERT INTO patients (id, name, phone, age, gender, preferred_language)
                 VALUES (?, ?, ?, ?, ?, ?)
               `).run(patientId, finalName, finalPhone, finalAge, finalGender, lang);
@@ -367,7 +367,7 @@ JSON Schema:
 
       // Log conversation message
       const logMsg = `[Sent Prescription Image] (AI Detected: ${medicine_days} days medicine course)`;
-      db.prepare(`
+      await db.prepare(`
         INSERT INTO conversations (patient_id, role, message, agent_used, language)
         VALUES (?, 'patient', ?, 'router', ?)
       `).run(patientId, logMsg, lang);
@@ -376,12 +376,12 @@ JSON Schema:
       let doctorId = 1;
       if (parsed.doctor_name) {
         const docNameClean = parsed.doctor_name.toLowerCase().replace('dr.', '').trim();
-        const matchedDoc = db.prepare('SELECT id FROM doctors WHERE name LIKE ?').get(`%${docNameClean}%`) as any;
+        const matchedDoc = await db.prepare('SELECT id FROM doctors WHERE name LIKE ?').get(`%${docNameClean}%`) as any;
         if (matchedDoc) doctorId = matchedDoc.id;
       }
 
       // Check for active appointment to mark completed
-      const activeAppt = db.prepare(`
+      const activeAppt = await db.prepare(`
         SELECT * FROM appointments 
         WHERE patient_id = ? AND status IN ('confirmed', 'rescheduled', 'pending') 
         ORDER BY date DESC LIMIT 1
@@ -390,10 +390,10 @@ JSON Schema:
       const apptDateStr = activeAppt ? activeAppt.date : new Date().toISOString().split('T')[0];
 
       if (activeAppt) {
-        db.prepare("UPDATE appointments SET status = 'completed' WHERE id = ?").run(activeAppt.id);
+        await db.prepare("UPDATE appointments SET status = 'completed' WHERE id = ?").run(activeAppt.id);
         
         try {
-          const docRecord = db.prepare('SELECT name FROM doctors WHERE id = ?').get(activeAppt.doctor_id) as any;
+          const docRecord = await db.prepare('SELECT name FROM doctors WHERE id = ?').get(activeAppt.doctor_id) as any;
           syncAppointmentToGoogleSheet({
             patientName: patient.name,
             patientPhone: patient.phone,
@@ -408,7 +408,7 @@ JSON Schema:
       }
 
       // Delete existing pending follow-ups
-      db.prepare("DELETE FROM follow_up_jobs WHERE patient_id = ? AND doctor_id = ? AND status = 'pending'").run(patientId, doctorId);
+      await db.prepare("DELETE FROM follow_up_jobs WHERE patient_id = ? AND doctor_id = ? AND status = 'pending'").run(patientId, doctorId);
 
       // Compute trigger date: apptDateStr + (medicine_days - 1)
       const triggerDate = new Date(apptDateStr);
@@ -416,7 +416,7 @@ JSON Schema:
       const followUpDateStr = triggerDate.toISOString().split('T')[0];
 
       // Schedule follow-up at 10:00 AM
-      db.prepare(`
+      await db.prepare(`
         INSERT INTO follow_up_jobs (patient_id, doctor_id, trigger_date, message_template, status)
         VALUES (?, ?, ?, 'medicine_reminder', 'pending')
       `).run(patientId, doctorId, followUpDateStr + ' 10:00');
@@ -430,7 +430,7 @@ JSON Schema:
       const botResponse = successMsgs[lang];
       await sendTextMessage(patientId, botResponse);
 
-      db.prepare(`
+      await db.prepare(`
         INSERT INTO conversations (patient_id, role, message, agent_used, language)
         VALUES (?, 'bot', ?, 'router', ?)
       `).run(patientId, botResponse, lang);
@@ -460,7 +460,7 @@ JSON Schema:
     clearBookingSession(patientId);
 
     // Send reset message depending on registration status
-    const patient = db.prepare('SELECT * FROM patients WHERE id = ?').get(patientId) as any;
+    const patient = await db.prepare('SELECT * FROM patients WHERE id = ?').get(patientId) as any;
     if (!patient) {
       // Start registration flow again
       await handleRegistration(patientId, phone, '');
@@ -477,7 +477,7 @@ JSON Schema:
   }
 
   // 1. Check if patient exists in DB
-  const patient = db.prepare('SELECT * FROM patients WHERE id = ?').get(patientId) as any;
+  const patient = await db.prepare('SELECT * FROM patients WHERE id = ?').get(patientId) as any;
 
   // 2. Handle Registration Flow
   if (!patient) {
@@ -498,7 +498,7 @@ JSON Schema:
     
     if (newLang) {
       try {
-        db.prepare('UPDATE patients SET preferred_language = ? WHERE id = ?').run(newLang, patientId);
+        await db.prepare('UPDATE patients SET preferred_language = ? WHERE id = ?').run(newLang, patientId);
         patient.preferred_language = newLang;
         langChangeSessions.delete(patientId);
         
@@ -509,7 +509,7 @@ JSON Schema:
         };
         await sendTextMessage(patientId, confirmMsgs[newLang]);
         
-        db.prepare(`
+        await db.prepare(`
           INSERT INTO conversations (patient_id, role, message, agent_used, language)
           VALUES (?, 'bot', ?, 'router', ?)
         `).run(patientId, confirmMsgs[newLang], newLang);
@@ -540,7 +540,7 @@ Reply with 1, 2, or 3`;
   const directLang = getDirectLanguageSwitch(text);
   if (directLang) {
     try {
-      db.prepare('UPDATE patients SET preferred_language = ? WHERE id = ?').run(directLang, patientId);
+      await db.prepare('UPDATE patients SET preferred_language = ? WHERE id = ?').run(directLang, patientId);
       patient.preferred_language = directLang;
       
       const confirmMsgs = {
@@ -550,7 +550,7 @@ Reply with 1, 2, or 3`;
       };
       await sendTextMessage(patientId, confirmMsgs[directLang]);
       
-      db.prepare(`
+      await db.prepare(`
         INSERT INTO conversations (patient_id, role, message, agent_used, language)
         VALUES (?, 'bot', ?, 'router', ?)
       `).run(patientId, confirmMsgs[directLang], directLang);
@@ -564,7 +564,7 @@ Reply with 1, 2, or 3`;
   // Insert incoming message into conversations table
   const loggedMessage = isVoice ? `🎤 [Voice Note]: ${text}` : text;
   const agentUsedForLog = hasActiveBookingSession(patientId) ? 'booking' : 'router';
-  db.prepare(`
+  await db.prepare(`
     INSERT INTO conversations (patient_id, role, message, agent_used, language)
     VALUES (?, ?, ?, ?, ?)
   `).run(patientId, 'patient', loggedMessage, agentUsedForLog, patient.preferred_language);
@@ -617,7 +617,7 @@ JSON Schema:
   // Update patient preferred language if it differs
   if (detectedLang !== patient.preferred_language) {
     try {
-      db.prepare('UPDATE patients SET preferred_language = ? WHERE id = ?').run(detectedLang, patientId);
+      await db.prepare('UPDATE patients SET preferred_language = ? WHERE id = ?').run(detectedLang, patientId);
       patient.preferred_language = detectedLang;
     } catch (e) {
       console.error('Failed to update patient language:', e);
@@ -881,7 +881,7 @@ JSON Schema:
     }
 
     // Check if phone number already exists
-    const exists = db.prepare('SELECT id FROM patients WHERE phone = ?').get(finalPhone);
+    const exists = await db.prepare('SELECT id FROM patients WHERE phone = ?').get(finalPhone);
     if (exists) {
       const existsMsgs = {
         hi: 'यह फ़ोन नंबर पहले से ही किसी अन्य मरीज के साथ रजिस्टर्ड है। कृपया दूसरा नंबर लिखकर भेजें।',
@@ -893,7 +893,7 @@ JSON Schema:
     }
 
     // Save to database
-    db.prepare(`
+    await db.prepare(`
       INSERT INTO patients (id, name, phone, age, gender, preferred_language)
       VALUES (?, ?, ?, ?, ?, ?)
     `).run(patientId, finalName, finalPhone, finalAge, finalGender, lang);
@@ -941,7 +941,7 @@ Do not mix scripts in the response. Do not give any medical advice.`;
     });
 
     // Write outgoing message to DB
-    db.prepare(`
+    await db.prepare(`
       INSERT INTO conversations (patient_id, role, message, agent_used, language)
       VALUES (?, ?, ?, ?, ?)
     `).run(patientId, 'bot', reply, 'router', lang);

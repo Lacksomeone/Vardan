@@ -59,13 +59,13 @@ function getDayName(dateStr: string): string {
 }
 
 // Fetch available slots for a doctor on a given date
-function getAvailableSlots(doctorId: number, dateStr: string): string[] {
-  const doctor = db.prepare('SELECT * FROM doctors WHERE id = ?').get(doctorId) as any;
+async function getAvailableSlots(doctorId: number, dateStr: string): Promise<string[]> {
+  const doctor = await db.prepare('SELECT * FROM doctors WHERE id = ?').get(doctorId) as any;
   if (!doctor || !doctor.active) return [];
 
   const dayName = getDayName(dateStr);
   const schedule = JSON.parse(doctor.weekly_schedule_json);
-  const dayWindows = schedule[dayName] as string[];
+  const dayWindows = schedule[dayName] as any;
   
   if (!dayWindows || dayWindows.length === 0) return [];
 
@@ -76,10 +76,10 @@ function getAvailableSlots(doctorId: number, dateStr: string): string[] {
   }
 
   // Get currently booked slots
-  const booked = db.prepare(`
+  const booked = await db.prepare(`
     SELECT time_slot FROM appointments 
     WHERE doctor_id = ? AND date = ? AND status IN ('pending', 'confirmed', 'rescheduled')
-  `).all(doctorId, dateStr) as { time_slot: string }[];
+  `).all(doctorId, dateStr) as any as { time_slot: string }[];
 
   const bookedSlots = booked.map(b => b.time_slot);
 
@@ -207,7 +207,7 @@ Format output as strict JSON:
       userPrompt: text,
       responseFormatJson: true
     });
-    const parsed = JSON.parse(resultStr) as { date: string | null };
+    const parsed = JSON.parse(resultStr) as any as { date: string | null };
     return parsed.date;
   } catch (err) {
     console.error('Date parsing failed:', err);
@@ -224,7 +224,7 @@ export async function handleBookingQuery(patientId: string, text: string, lang: 
     
     // Check if user wants to cancel
     if (textLower.includes('cancel') || textLower.includes('radd') || textLower.includes('khatam') || textLower.includes('cancle')) {
-      const activeAppt = db.prepare(`
+      const activeAppt = await db.prepare(`
         SELECT a.*, d.name as doctor_name FROM appointments a
         JOIN doctors d ON a.doctor_id = d.id
         WHERE a.patient_id = ? AND a.status IN ('pending', 'confirmed')
@@ -258,7 +258,7 @@ export async function handleBookingQuery(patientId: string, text: string, lang: 
 
     // Check if user wants to reschedule
     if (textLower.includes('reschedule') || textLower.includes('change') || textLower.includes('badal')) {
-      const activeAppt = db.prepare(`
+      const activeAppt = await db.prepare(`
         SELECT a.*, d.name as doctor_name FROM appointments a
         JOIN doctors d ON a.doctor_id = d.id
         WHERE a.patient_id = ? AND a.status IN ('pending', 'confirmed')
@@ -297,9 +297,9 @@ export async function handleBookingQuery(patientId: string, text: string, lang: 
     let preExtractedRelation: string | null = null;
 
     try {
-      const doctors = db.prepare('SELECT * FROM doctors WHERE active = 1').all() as any[];
+      const doctors = await db.prepare('SELECT * FROM doctors WHERE active = 1').all() as any;
       if (doctors.length > 0) {
-        const docListStr = doctors.map(d => `${d.id}: Dr. ${d.name} (${d.department})`).join('\n');
+        const docListStr = doctors.map((d: any) => `${d.id}: Dr. ${d.name} (${d.department})`).join('\n');
         const systemPrompt = `You are a smart booking receptionist for Vardan Hospital.
 We have the following doctors currently active:
 ${docListStr}
@@ -330,7 +330,7 @@ Format your output as a strict JSON object matching this schema:
             cleaned = match[1].trim();
           }
         }
-        const parsed = JSON.parse(cleaned) as { doctorId: number | null; date: string | null; relation: string | null };
+        const parsed = JSON.parse(cleaned) as any as { doctorId: number | null; date: string | null; relation: string | null };
         if (parsed.doctorId) {
           preExtractedDocId = Number(parsed.doctorId);
         }
@@ -361,10 +361,10 @@ Format your output as a strict JSON object matching this schema:
     if (session.doctorId && session.date) {
       const todayStr = new Date().toISOString().split('T')[0];
       if (session.date >= todayStr) {
-        const slots = getAvailableSlots(session.doctorId, session.date);
+        const slots = await getAvailableSlots(session.doctorId, session.date);
         if (slots.length > 0) {
           session.stage = 'slot';
-          const doctor = db.prepare('SELECT * FROM doctors WHERE id = ?').get(session.doctorId) as any;
+          const doctor = await db.prepare('SELECT * FROM doctors WHERE id = ?').get(session.doctorId) as any;
           const slotList = slots.map((s, i) => `${i + 1}. ${s}`).join('\n');
           const relationStr = session.patientRelation ? ` (for your ${session.patientRelation})` : '';
           
@@ -381,7 +381,7 @@ Format your output as a strict JSON object matching this schema:
 
     if (session.doctorId && !session.date) {
       session.stage = 'date';
-      const doctor = db.prepare('SELECT * FROM doctors WHERE id = ?').get(session.doctorId) as any;
+      const doctor = await db.prepare('SELECT * FROM doctors WHERE id = ?').get(session.doctorId) as any;
       const datePrompt = {
         hi: `ठीक है, आप **${doctor.name}** के साथ अपॉइंटमेंट बुक करना चाहते हैं। कृपया दिनांक (तारीख या दिन) बताएं (जैसे: कल, या 13 July)।`,
         hinglish: `Okay, aap **${doctor.name}** ke sath appointment book karna chahte hain. Kripya date (tarikh ya day) batayein (e.g. kal, ya 13 July).`,
@@ -414,7 +414,7 @@ Format your output as a strict JSON object matching this schema:
 
   // 2. Process stage: doctor_or_symptom
   if (session.stage === 'doctor_or_symptom') {
-    const doctors = db.prepare('SELECT * FROM doctors WHERE active = 1').all() as any[];
+    const doctors = await db.prepare('SELECT * FROM doctors WHERE active = 1').all() as any;
     let selectedDoc: any = null;
 
     // Check direct name match (handles partial matching like "Nitin" or "Ankit" or "Om")
@@ -430,7 +430,7 @@ Format your output as a strict JSON object matching this schema:
     // Advanced LLM symptom/doctor matching
     if (!selectedDoc && doctors.length > 0) {
       try {
-        const docListStr = doctors.map(d => `${d.id}: Dr. ${d.name} (${d.department})`).join('\n');
+        const docListStr = doctors.map((d: any) => `${d.id}: Dr. ${d.name} (${d.department})`).join('\n');
         const systemPrompt = `You are a medical appointment classification assistant for Vardan Hospital.
 We have the following doctors currently active:
 ${docListStr}
@@ -452,9 +452,9 @@ Format your output as a strict JSON object matching this schema:
           responseFormatJson: true
         });
 
-        const parsed = JSON.parse(responseStr) as { doctorId: number | null };
+        const parsed = JSON.parse(responseStr) as any as { doctorId: number | null };
         if (parsed.doctorId) {
-          const matched = doctors.find(d => d.id === parsed.doctorId);
+          const matched = doctors.find((d: any) => d.id === parsed.doctorId);
           if (matched) {
             selectedDoc = matched;
             console.log(`[Doctor Matching] Match found by LLM: Dr. ${selectedDoc.name}`);
@@ -468,11 +468,11 @@ Format your output as a strict JSON object matching this schema:
     // Heuristics mapping fallback if LLM matching fails
     if (!selectedDoc && doctors.length > 0) {
       if (lowerText.includes('chest') || lowerText.includes('heart') || lowerText.includes('cardiac') || lowerText.includes('dil') || lowerText.includes('bp')) {
-        selectedDoc = doctors.find(d => d.department === 'Cardiology');
+        selectedDoc = doctors.find((d: any) => d.department === 'Cardiology');
       } else if (lowerText.includes('bacha') || lowerText.includes('child') || lowerText.includes('kid') || lowerText.includes('baby') || lowerText.includes('pediatric')) {
-        selectedDoc = doctors.find(d => d.department === 'Pediatrics');
+        selectedDoc = doctors.find((d: any) => d.department === 'Pediatrics');
       } else {
-        selectedDoc = doctors.find(d => d.department === 'General Medicine');
+        selectedDoc = doctors.find((d: any) => d.department === 'General Medicine');
       }
     }
 
@@ -532,7 +532,7 @@ Format your output as a strict JSON object matching this schema:
 
 
 
-    const slots = getAvailableSlots(session.doctorId!, parsedDate);
+    const slots = await getAvailableSlots(session.doctorId!, parsedDate);
     if (slots.length === 0) {
       const noSlots = {
         hi: `${parsedDate} को कोई स्लॉट उपलब्ध नहीं है। कृपया कोई अन्य तारीख बताएं।`,
@@ -559,7 +559,7 @@ Format your output as a strict JSON object matching this schema:
 
   // 4. Process stage: slot
   if (session.stage === 'slot') {
-    const slots = getAvailableSlots(session.doctorId!, session.date!);
+    const slots = await getAvailableSlots(session.doctorId!, session.date!);
     
     let matchedSlot: string | undefined = undefined;
     const index = parseInt(text.trim(), 10);
@@ -582,22 +582,22 @@ Format your output as a strict JSON object matching this schema:
     session.timeSlot = matchedSlot;
 
     // ✅ AUTO-BOOK: Skip confirmation, book immediately with race-condition check
-    const doctorForBook = db.prepare('SELECT name, department FROM doctors WHERE id = ?').get(session.doctorId!) as any;
+    const doctorForBook = await db.prepare('SELECT name, department FROM doctors WHERE id = ?').get(session.doctorId!) as any;
     try {
       // Manual transaction (node:sqlite DatabaseSync has no .transaction() method)
       db.exec('BEGIN TRANSACTION');
       try {
-        const currentSlots = getAvailableSlots(session.doctorId!, session.date!);
+        const currentSlots = await getAvailableSlots(session.doctorId!, session.date!);
         if (!currentSlots.includes(session.timeSlot!)) {
           throw new Error('SLOT_TAKEN');
         }
 
         // If rescheduling, cancel the old appointment first
         if (session.action === 'reschedule' && session.appointmentIdToModify) {
-          db.prepare("UPDATE appointments SET status = 'cancelled' WHERE id = ?").run(session.appointmentIdToModify);
+          await db.prepare("UPDATE appointments SET status = 'cancelled' WHERE id = ?").run(session.appointmentIdToModify);
         }
 
-        db.prepare(`
+        await db.prepare(`
           INSERT INTO appointments (patient_id, doctor_id, date, time_slot, status)
           VALUES (?, ?, ?, ?, 'confirmed')
         `).run(patientId, session.doctorId, session.date, session.timeSlot);
@@ -607,7 +607,7 @@ Format your output as a strict JSON object matching this schema:
         throw txErr;
       }
 
-      const patientForBook = db.prepare('SELECT name, phone FROM patients WHERE id = ?').get(patientId) as any;
+      const patientForBook = await db.prepare('SELECT name, phone FROM patients WHERE id = ?').get(patientId) as any;
 
       // Sync to Google Sheets
       syncAppointmentToGoogleSheet({
@@ -632,9 +632,9 @@ Format your output as a strict JSON object matching this schema:
     } catch (err: any) {
       if (err.message === 'SLOT_TAKEN') {
         const takenMsg = {
-          hi: `क्षमा करें, ${session.timeSlot} का स्लॉट अभी भर गया है। कृपया कोई और समय चुनें:\n\n${getAvailableSlots(session.doctorId!, session.date!).join('\n')}`,
-          hinglish: `Sorry, ${session.timeSlot} slot abhi kisi aur ne book kar liya. Koi aur slot chunein:\n\n${getAvailableSlots(session.doctorId!, session.date!).join('\n')}`,
-          en: `Sorry, the ${session.timeSlot} slot was just taken. Please pick another:\n\n${getAvailableSlots(session.doctorId!, session.date!).join('\n')}`
+          hi: `क्षमा करें, ${session.timeSlot} का स्लॉट अभी भर गया है। कृपया कोई और समय चुनें:\n\n${(await getAvailableSlots(session.doctorId!, session.date!)).join('\n')}`,
+          hinglish: `Sorry, ${session.timeSlot} slot abhi kisi aur ne book kar liya. Koi aur slot chunein:\n\n${(await getAvailableSlots(session.doctorId!, session.date!)).join('\n')}`,
+          en: `Sorry, the ${session.timeSlot} slot was just taken. Please pick another:\n\n${(await getAvailableSlots(session.doctorId!, session.date!)).join('\n')}`
         };
         session.stage = 'slot'; // Stay on slot selection
         await sendTextMessage(patientId, takenMsg[lang]);
@@ -661,13 +661,13 @@ Format your output as a strict JSON object matching this schema:
           db.exec('BEGIN TRANSACTION');
           try {
             // Re-query availability
-            const currentSlots = getAvailableSlots(session.doctorId!, session.date!);
+            const currentSlots = await getAvailableSlots(session.doctorId!, session.date!);
             if (!currentSlots.includes(session.timeSlot!)) {
               throw new Error('SLOT_TAKEN');
             }
 
             // Create appointment
-            db.prepare(`
+            await db.prepare(`
               INSERT INTO appointments (patient_id, doctor_id, date, time_slot, status)
               VALUES (?, ?, ?, ?, 'confirmed')
             `).run(patientId, session.doctorId, session.date, session.timeSlot);
@@ -677,8 +677,8 @@ Format your output as a strict JSON object matching this schema:
             throw txErr;
           }
 
-          const patient = db.prepare('SELECT name, phone FROM patients WHERE id = ?').get(patientId) as any;
-          const doctor = db.prepare('SELECT name, department FROM doctors WHERE id = ?').get(session.doctorId!) as any;
+          const patient = await db.prepare('SELECT name, phone FROM patients WHERE id = ?').get(patientId) as any;
+          const doctor = await db.prepare('SELECT name, department FROM doctors WHERE id = ?').get(session.doctorId!) as any;
           
           // Sync to Google Spreadsheet in background
           syncAppointmentToGoogleSheet({
@@ -710,7 +710,7 @@ Format your output as a strict JSON object matching this schema:
           }
         }
       } else if (session.action === 'cancel') {
-        db.prepare("UPDATE appointments SET status = 'cancelled' WHERE id = ?").run(session.appointmentIdToModify);
+        await db.prepare("UPDATE appointments SET status = 'cancelled' WHERE id = ?").run(session.appointmentIdToModify);
         const successCancel = {
           hi: 'आपका अपॉइंटमेंट सफलतापूर्वक कैंसिल कर दिया गया है।',
           hinglish: 'Aapka appointment successfully cancel kar diya gaya hai.',
@@ -722,14 +722,14 @@ Format your output as a strict JSON object matching this schema:
           // Manual transaction (node:sqlite DatabaseSync has no .transaction() method)
           db.exec('BEGIN TRANSACTION');
           try {
-            const currentSlots = getAvailableSlots(session.doctorId!, session.date!);
+            const currentSlots = await getAvailableSlots(session.doctorId!, session.date!);
             if (!currentSlots.includes(session.timeSlot!)) {
               throw new Error('SLOT_TAKEN');
             }
 
             // Cancel old and create new/update
-            db.prepare("UPDATE appointments SET status = 'cancelled' WHERE id = ?").run(session.appointmentIdToModify);
-            db.prepare(`
+            await db.prepare("UPDATE appointments SET status = 'cancelled' WHERE id = ?").run(session.appointmentIdToModify);
+            await db.prepare(`
               INSERT INTO appointments (patient_id, doctor_id, date, time_slot, status)
               VALUES (?, ?, ?, ?, 'confirmed')
             `).run(patientId, session.doctorId, session.date, session.timeSlot);
@@ -739,8 +739,8 @@ Format your output as a strict JSON object matching this schema:
             throw txErr;
           }
 
-          const patient = db.prepare('SELECT name, phone FROM patients WHERE id = ?').get(patientId) as any;
-          const doctor = db.prepare('SELECT name FROM doctors WHERE id = ?').get(session.doctorId!) as any;
+          const patient = await db.prepare('SELECT name, phone FROM patients WHERE id = ?').get(patientId) as any;
+          const doctor = await db.prepare('SELECT name FROM doctors WHERE id = ?').get(session.doctorId!) as any;
 
           // Sync rescheduled appointment to Google Spreadsheet
           syncAppointmentToGoogleSheet({

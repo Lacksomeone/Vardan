@@ -14,7 +14,7 @@ const router = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'vardan_secret_key_super_secure_9876';
 
 // ─── Image/Document Upload Endpoint (Base64) ────────────────────────────────
-router.post('/upload', (req: any, res, next) => {
+router.post('/upload', async (req: any, res, next) => {
   authMiddleware(req, res, next);
 }, (req: any, res) => {
   const { filename, base64Data, category } = req.body;
@@ -68,13 +68,13 @@ export function authMiddleware(req: any, res: any, next: any) {
 }
 
 // 1. Authentication
-router.post('/auth/login', (req, res) => {
+router.post('/auth/login', async (req, res) => {
   const { username, password } = req.body;
   if (!username || !password) {
     return res.status(400).json({ error: 'Username and password required' });
   }
 
-  const user = db.prepare('SELECT * FROM admin_users WHERE username = ?').get(username) as any;
+  const user = await db.prepare('SELECT * FROM admin_users WHERE username = ?').get(username) as any;
   if (!user || !bcrypt.compareSync(password, user.password_hash)) {
     return res.status(401).json({ error: 'Invalid username or password' });
   }
@@ -86,17 +86,17 @@ router.post('/auth/login', (req, res) => {
   return res.json({ token, user: { name: user.name, username: user.username, role: user.role } });
 });
 
-router.get('/auth/me', authMiddleware, (req: any, res) => {
+router.get('/auth/me', authMiddleware, async (req: any, res) => {
   return res.json({ user: req.user });
 });
 
 // 2. Doctor Management
-router.get('/doctors', authMiddleware, (req, res) => {
-  const doctors = db.prepare('SELECT * FROM doctors ORDER BY name ASC').all();
+router.get('/doctors', authMiddleware, async (req, res) => {
+  const doctors = await db.prepare('SELECT * FROM doctors ORDER BY name ASC').all();
   return res.json(doctors);
 });
 
-router.post('/doctors', authMiddleware, (req: any, res) => {
+router.post('/doctors', authMiddleware, async (req: any, res) => {
   if (req.user.role !== 'owner') return res.status(403).json({ error: 'Only Owner can add doctors' });
 
   const { name, department, phone, weekly_schedule_json, fee, details, photo_url, services } = req.body;
@@ -105,7 +105,7 @@ router.post('/doctors', authMiddleware, (req: any, res) => {
   }
 
   try {
-    const info = db.prepare(`
+    const info = await db.prepare(`
       INSERT INTO doctors (name, department, phone, weekly_schedule_json, fee, details, photo_url, services)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `).run(name, department, phone, weekly_schedule_json, fee, details || null, photo_url || null, services || null);
@@ -116,7 +116,7 @@ router.post('/doctors', authMiddleware, (req: any, res) => {
 });
 
 // ─── Bulk Doctor Import (up to 50 at once) ───────────────────────────────────
-router.post('/doctors/bulk', authMiddleware, (req: any, res) => {
+router.post('/doctors/bulk', authMiddleware, async (req: any, res) => {
   if (req.user.role !== 'owner') return res.status(403).json({ error: 'Only Owner can bulk import doctors' });
 
   const { doctors } = req.body;
@@ -128,7 +128,7 @@ router.post('/doctors/bulk', authMiddleware, (req: any, res) => {
   }
 
   const results: { index: number; name: string; status: 'success' | 'error'; id?: number; error?: string }[] = [];
-  const stmt = db.prepare(`
+  const stmt = await db.prepare(`
     INSERT INTO doctors (name, department, phone, weekly_schedule_json, fee, details, photo_url, services)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `);
@@ -140,7 +140,7 @@ router.post('/doctors/bulk', authMiddleware, (req: any, res) => {
       continue;
     }
     try {
-      const info = stmt.run(
+      const info = await stmt.run(
         doc.name.trim(),
         doc.department.trim(),
         doc.phone.trim(),
@@ -267,14 +267,14 @@ Ensure the output is ONLY a valid JSON object. Do not include markdown blocks li
   }
 });
 
-router.put('/doctors/:id', authMiddleware, (req: any, res) => {
+router.put('/doctors/:id', authMiddleware, async (req: any, res) => {
   if (req.user.role !== 'owner') return res.status(403).json({ error: 'Only Owner can modify doctors' });
 
   const { id } = req.params;
   const { name, department, phone, weekly_schedule_json, fee, details, photo_url, services, active } = req.body;
 
   try {
-    db.prepare(`
+    await db.prepare(`
       UPDATE doctors 
       SET name = ?, department = ?, phone = ?, weekly_schedule_json = ?, fee = ?, details = ?, photo_url = ?, services = ?, active = ?
       WHERE id = ?
@@ -286,13 +286,13 @@ router.put('/doctors/:id', authMiddleware, (req: any, res) => {
 });
 
 
-router.delete('/doctors/:id', authMiddleware, (req: any, res) => {
+router.delete('/doctors/:id', authMiddleware, async (req: any, res) => {
   if (req.user.role !== 'owner') return res.status(403).json({ error: 'Only Owner can remove doctors' });
   const { id } = req.params;
 
   try {
     // Soft delete / deactivate
-    db.prepare('UPDATE doctors SET active = 0 WHERE id = ?').run(id);
+    await db.prepare('UPDATE doctors SET active = 0 WHERE id = ?').run(id);
     return res.json({ message: 'Doctor deactivated successfully' });
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
@@ -300,17 +300,17 @@ router.delete('/doctors/:id', authMiddleware, (req: any, res) => {
 });
 
 // ─── Doctor Document Management ───────────────────────────────────────────────
-router.get('/doctors/:id/documents', authMiddleware, (req, res) => {
+router.get('/doctors/:id/documents', authMiddleware, async (req, res) => {
   const { id } = req.params;
   try {
-    const docs = db.prepare('SELECT * FROM doctor_documents WHERE doctor_id = ? ORDER BY uploaded_at DESC').all(Number(id));
+    const docs = await db.prepare('SELECT * FROM doctor_documents WHERE doctor_id = ? ORDER BY uploaded_at DESC').all(Number(id));
     return res.json(docs);
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
   }
 });
 
-router.post('/doctors/:id/documents', authMiddleware, (req: any, res) => {
+router.post('/doctors/:id/documents', authMiddleware, async (req: any, res) => {
   if (req.user.role !== 'owner') return res.status(403).json({ error: 'Only Owner can upload documents' });
   const { id } = req.params;
   const { category, filename, file_url } = req.body;
@@ -324,11 +324,11 @@ router.post('/doctors/:id/documents', authMiddleware, (req: any, res) => {
   }
 
   // Verify doctor exists
-  const doctor = db.prepare('SELECT id FROM doctors WHERE id = ?').get(Number(id));
+  const doctor = await db.prepare('SELECT id FROM doctors WHERE id = ?').get(Number(id));
   if (!doctor) return res.status(404).json({ error: 'Doctor not found' });
 
   try {
-    const info = db.prepare(`
+    const info = await db.prepare(`
       INSERT INTO doctor_documents (doctor_id, category, filename, file_url)
       VALUES (?, ?, ?, ?)
     `).run(Number(id), category, filename, file_url);
@@ -338,15 +338,15 @@ router.post('/doctors/:id/documents', authMiddleware, (req: any, res) => {
   }
 });
 
-router.delete('/doctors/:doctorId/documents/:docId', authMiddleware, (req: any, res) => {
+router.delete('/doctors/:doctorId/documents/:docId', authMiddleware, async (req: any, res) => {
   if (req.user.role !== 'owner') return res.status(403).json({ error: 'Only Owner can delete documents' });
   const { doctorId, docId } = req.params;
   try {
     // Get the file URL before deleting to optionally remove from disk
-    const doc = db.prepare('SELECT * FROM doctor_documents WHERE id = ? AND doctor_id = ?').get(Number(docId), Number(doctorId)) as any;
+    const doc = await db.prepare('SELECT * FROM doctor_documents WHERE id = ? AND doctor_id = ?').get(Number(docId), Number(doctorId)) as any;
     if (!doc) return res.status(404).json({ error: 'Document not found' });
 
-    db.prepare('DELETE FROM doctor_documents WHERE id = ? AND doctor_id = ?').run(Number(docId), Number(doctorId));
+    await db.prepare('DELETE FROM doctor_documents WHERE id = ? AND doctor_id = ?').run(Number(docId), Number(doctorId));
 
     // Attempt to delete the physical file from disk
     if (doc.file_url && doc.file_url.startsWith('/uploads/')) {
@@ -362,7 +362,7 @@ router.delete('/doctors/:doctorId/documents/:docId', authMiddleware, (req: any, 
 });
 
 // 3. Appointments Management
-router.get('/appointments', authMiddleware, (req, res) => {
+router.get('/appointments', authMiddleware, async (req, res) => {
   const { doctor_id, date, status } = req.query;
   let query = `
     SELECT a.*, p.name as patient_name, p.phone as patient_phone, d.name as doctor_name, d.department 
@@ -387,11 +387,11 @@ router.get('/appointments', authMiddleware, (req, res) => {
   }
 
   query += ' ORDER BY a.date DESC, a.time_slot ASC';
-  const appointments = db.prepare(query).all(...params);
+  const appointments = await db.prepare(query).all(...params);
   return res.json(appointments);
 });
 
-router.post('/appointments', authMiddleware, (req, res) => {
+router.post('/appointments', authMiddleware, async (req, res) => {
   const { patient_phone, doctor_id, date, time_slot } = req.body;
   if (!patient_phone || !doctor_id || !date || !time_slot) {
     return res.status(400).json({ error: 'All fields are required' });
@@ -401,14 +401,14 @@ router.post('/appointments', authMiddleware, (req, res) => {
   const formattedJid = `${patient_phone.replace('+', '')}@s.whatsapp.net`;
   
   // Verify patient exists
-  const patient = db.prepare('SELECT id FROM patients WHERE id = ?').get(formattedJid);
+  const patient = await db.prepare('SELECT id FROM patients WHERE id = ?').get(formattedJid);
   if (!patient) {
     return res.status(404).json({ error: 'Patient with this phone number not registered on WhatsApp system' });
   }
 
   try {
     // Direct conflict double-check
-    const conflict = db.prepare(`
+    const conflict = await db.prepare(`
       SELECT id FROM appointments 
       WHERE doctor_id = ? AND date = ? AND time_slot = ? AND status IN ('pending', 'confirmed', 'rescheduled')
     `).get(doctor_id, date, time_slot);
@@ -417,14 +417,14 @@ router.post('/appointments', authMiddleware, (req, res) => {
       return res.status(409).json({ error: 'Time slot is already booked for this doctor' });
     }
 
-    const info = db.prepare(`
+    const info = await db.prepare(`
       INSERT INTO appointments (patient_id, doctor_id, date, time_slot, status)
       VALUES (?, ?, ?, ?, 'confirmed')
     `).run(formattedJid, doctor_id, date, time_slot);
 
     // Sync to Google Spreadsheet in background
-    const pRecord = db.prepare('SELECT name, phone FROM patients WHERE id = ?').get(formattedJid) as any;
-    const dRecord = db.prepare('SELECT name FROM doctors WHERE id = ?').get(doctor_id) as any;
+    const pRecord = await db.prepare('SELECT name, phone FROM patients WHERE id = ?').get(formattedJid) as any;
+    const dRecord = await db.prepare('SELECT name FROM doctors WHERE id = ?').get(doctor_id) as any;
     syncAppointmentToGoogleSheet({
       patientName: pRecord.name,
       patientPhone: pRecord.phone,
@@ -440,17 +440,17 @@ router.post('/appointments', authMiddleware, (req, res) => {
   }
 });
 
-router.post('/appointments/:id/cancel', authMiddleware, (req, res) => {
+router.post('/appointments/:id/cancel', authMiddleware, async (req, res) => {
   const { id } = req.params;
   try {
-    db.prepare("UPDATE appointments SET status = 'cancelled' WHERE id = ?").run(id);
+    await db.prepare("UPDATE appointments SET status = 'cancelled' WHERE id = ?").run(id);
     return res.json({ message: 'Appointment cancelled' });
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
   }
 });
 
-router.post('/appointments/:id/complete', authMiddleware, (req: any, res) => {
+router.post('/appointments/:id/complete', authMiddleware, async (req: any, res) => {
   const { id } = req.params;
   const { medicine_days } = req.body;
   if (!medicine_days || isNaN(Number(medicine_days)) || Number(medicine_days) < 1) {
@@ -459,13 +459,13 @@ router.post('/appointments/:id/complete', authMiddleware, (req: any, res) => {
 
   try {
     // 1. Mark appointment completed
-    db.prepare("UPDATE appointments SET status = 'completed' WHERE id = ?").run(id);
+    await db.prepare("UPDATE appointments SET status = 'completed' WHERE id = ?").run(id);
     
     // Get appointment details to schedule follow-up
-    const appt = db.prepare('SELECT * FROM appointments WHERE id = ?').get(id) as any;
+    const appt = await db.prepare('SELECT * FROM appointments WHERE id = ?').get(id) as any;
     if (appt) {
       // 2. Clear any existing pending follow-ups for this patient/doctor
-      db.prepare("DELETE FROM follow_up_jobs WHERE patient_id = ? AND doctor_id = ? AND status = 'pending'").run(appt.patient_id, appt.doctor_id);
+      await db.prepare("DELETE FROM follow_up_jobs WHERE patient_id = ? AND doctor_id = ? AND status = 'pending'").run(appt.patient_id, appt.doctor_id);
 
       // 3. Compute trigger date: appointment_date + (medicine_days - 1)
       const apptDate = new Date(appt.date);
@@ -473,7 +473,7 @@ router.post('/appointments/:id/complete', authMiddleware, (req: any, res) => {
       const followUpDateStr = apptDate.toISOString().split('T')[0] + ' 10:00';
 
       // 4. Create follow-up job
-      db.prepare(`
+      await db.prepare(`
         INSERT INTO follow_up_jobs (patient_id, doctor_id, trigger_date, message_template, status)
         VALUES (?, ?, ?, 'medicine_reminder', 'pending')
       `).run(appt.patient_id, appt.doctor_id, followUpDateStr);
@@ -482,8 +482,8 @@ router.post('/appointments/:id/complete', authMiddleware, (req: any, res) => {
 
       // Sync completed status to Google Sheets in background
       try {
-        const pRecord = db.prepare('SELECT name, phone FROM patients WHERE id = ?').get(appt.patient_id) as any;
-        const dRecord = db.prepare('SELECT name FROM doctors WHERE id = ?').get(appt.doctor_id) as any;
+        const pRecord = await db.prepare('SELECT name, phone FROM patients WHERE id = ?').get(appt.patient_id) as any;
+        const dRecord = await db.prepare('SELECT name FROM doctors WHERE id = ?').get(appt.doctor_id) as any;
         syncAppointmentToGoogleSheet({
           patientName: pRecord.name,
           patientPhone: pRecord.phone,
@@ -504,8 +504,8 @@ router.post('/appointments/:id/complete', authMiddleware, (req: any, res) => {
 });
 
 // 4. Patients View
-router.get('/patients', authMiddleware, (req, res) => {
-  const patients = db.prepare('SELECT * FROM patients ORDER BY name ASC').all();
+router.get('/patients', authMiddleware, async (req, res) => {
+  const patients = await db.prepare('SELECT * FROM patients ORDER BY name ASC').all();
   return res.json(patients);
 });
 
@@ -520,18 +520,18 @@ router.get('/patients/import-sheets', authMiddleware, async (req, res) => {
   }
 });
 
-router.get('/patients/:id/history', authMiddleware, (req: any, res) => {
+router.get('/patients/:id/history', authMiddleware, async (req: any, res) => {
   // Decode the patient ID — WhatsApp JIDs contain '@' which gets URL-encoded
   const id = decodeURIComponent(req.params.id);
   
-  const history = db.prepare(`
+  const history = await db.prepare(`
     SELECT * FROM conversations 
     WHERE patient_id = ? 
     ORDER BY timestamp ASC
   `).all(id);
   
   // Also get patient appointments
-  const appointments = db.prepare(`
+  const appointments = await db.prepare(`
     SELECT a.*, d.name as doctor_name, d.department
     FROM appointments a
     JOIN doctors d ON a.doctor_id = d.id
@@ -546,7 +546,7 @@ router.post('/patients/:id/reset-session', authMiddleware, async (req: any, res)
   const id = decodeURIComponent(req.params.id);
 
   try {
-    const patient = db.prepare('SELECT * FROM patients WHERE id = ?').get(id) as any;
+    const patient = await db.prepare('SELECT * FROM patients WHERE id = ?').get(id) as any;
     if (!patient) {
       return res.status(404).json({ error: 'Patient not found' });
     }
@@ -567,7 +567,7 @@ router.post('/patients/:id/reset-session', authMiddleware, async (req: any, res)
     await sendTextMessage(id, msg);
 
     // Log the reset system message in conversation
-    db.prepare(`
+    await db.prepare(`
       INSERT INTO conversations (patient_id, role, message, agent_used, language)
       VALUES (?, ?, ?, ?, ?)
     `).run(id, 'system', 'Chat session reset by admin.', 'dashboard', lang);
@@ -584,7 +584,7 @@ router.post('/patients/:id/reset-session', authMiddleware, async (req: any, res)
 });
 
 // Google Sheet link
-router.get('/sheets/url', authMiddleware, (req, res) => {
+router.get('/sheets/url', authMiddleware, async (req, res) => {
   const spreadsheetId = '1YH1C0cFZ-JAJrMV0lhkyHtC1I5aWYPVTHDRFTNNwbas';
   return res.json({
     url: `https://docs.google.com/spreadsheets/d/${spreadsheetId}`,
@@ -594,16 +594,16 @@ router.get('/sheets/url', authMiddleware, (req, res) => {
 });
 
 // 5. Knowledge Base Editor
-router.get('/kb', authMiddleware, (req, res) => {
-  const entries = db.prepare('SELECT * FROM knowledge_base ORDER BY category ASC').all();
+router.get('/kb', authMiddleware, async (req, res) => {
+  const entries = await db.prepare('SELECT * FROM knowledge_base ORDER BY category ASC').all();
   return res.json(entries);
 });
 
-router.post('/kb', authMiddleware, (req, res) => {
+router.post('/kb', authMiddleware, async (req, res) => {
   const { category, question_variants, answer_hi, answer_en, answer_hinglish } = req.body;
   
   try {
-    const info = db.prepare(`
+    const info = await db.prepare(`
       INSERT INTO knowledge_base (category, question_variants, answer_hi, answer_en, answer_hinglish)
       VALUES (?, ?, ?, ?, ?)
     `).run(category, JSON.stringify(question_variants), answer_hi, answer_en, answer_hinglish);
@@ -614,12 +614,12 @@ router.post('/kb', authMiddleware, (req, res) => {
   }
 });
 
-router.put('/kb/:id', authMiddleware, (req, res) => {
+router.put('/kb/:id', authMiddleware, async (req, res) => {
   const { id } = req.params;
   const { category, question_variants, answer_hi, answer_en, answer_hinglish } = req.body;
 
   try {
-    db.prepare(`
+    await db.prepare(`
       UPDATE knowledge_base 
       SET category = ?, question_variants = ?, answer_hi = ?, answer_en = ?, answer_hinglish = ?, updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
@@ -631,8 +631,8 @@ router.put('/kb/:id', authMiddleware, (req, res) => {
 });
 
 // 6. Pending Queries
-router.get('/pending-queries', authMiddleware, (req, res) => {
-  const queries = db.prepare(`
+router.get('/pending-queries', authMiddleware, async (req, res) => {
+  const queries = await db.prepare(`
     SELECT pq.*, p.name as patient_name, p.phone as patient_phone 
     FROM pending_queries pq
     JOIN patients p ON pq.patient_id = p.id
@@ -647,7 +647,7 @@ router.post('/pending-queries/:id/resolve', authMiddleware, async (req: any, res
   const { answer, addToKb, category, question_variants } = req.body;
 
   // Fetch query details to get patient JID
-  const queryRow = db.prepare('SELECT patient_id, question FROM pending_queries WHERE id = ?').get(id) as { patient_id: string; question: string } | undefined;
+  const queryRow = await db.prepare('SELECT patient_id, question FROM pending_queries WHERE id = ?').get(id) as any as { patient_id: string; question: string } | undefined;
   if (!queryRow) {
     return res.status(404).json({ error: 'Query not found' });
   }
@@ -657,7 +657,7 @@ router.post('/pending-queries/:id/resolve', authMiddleware, async (req: any, res
     db.exec('BEGIN TRANSACTION');
     try {
       // Mark resolved
-      db.prepare(`
+      await db.prepare(`
         UPDATE pending_queries 
         SET status = 'resolved', answered_by = ?, answer = ? 
         WHERE id = ?
@@ -665,18 +665,18 @@ router.post('/pending-queries/:id/resolve', authMiddleware, async (req: any, res
 
       // Optionally add to KB
       if (addToKb && category && question_variants) {
-        db.prepare(`
+        await db.prepare(`
           INSERT INTO knowledge_base (category, question_variants, answer_hi, answer_en, answer_hinglish)
           VALUES (?, ?, ?, ?, ?)
         `).run(category, JSON.stringify(question_variants), answer, answer, answer);
       }
 
       // Retrieve patient preferred language to store conversation log correctly
-      const patient = db.prepare('SELECT preferred_language FROM patients WHERE id = ?').get(queryRow.patient_id) as { preferred_language: string } | undefined;
+      const patient = await db.prepare('SELECT preferred_language FROM patients WHERE id = ?').get(queryRow.patient_id) as any as { preferred_language: string } | undefined;
       const lang = patient?.preferred_language || 'en';
 
       // Insert resolved answer into conversation logs
-      db.prepare(`
+      await db.prepare(`
         INSERT INTO conversations (patient_id, role, message, agent_used, language)
         VALUES (?, ?, ?, ?, ?)
       `).run(queryRow.patient_id, 'bot', answer, 'faq', lang);
@@ -697,11 +697,11 @@ router.post('/pending-queries/:id/resolve', authMiddleware, async (req: any, res
 });
 
 // 7. Live Monitoring
-router.get('/monitor/status', authMiddleware, (req, res) => {
-  const keys = db.prepare('SELECT id, provider, key_val, cooldown_until, usage_count, active FROM llm_keys').all() as any[];
+router.get('/monitor/status', authMiddleware, async (req, res) => {
+  const keys = await db.prepare('SELECT id, provider, key_val, cooldown_until, usage_count, active FROM llm_keys').all() as any;
   
   // Format cooldowns to Boolean and mask key values
-  const formattedKeys = keys.map(k => ({
+  const formattedKeys = keys.map((k: any) => ({
     id: k.id,
     provider: k.provider,
     key: k.key_val ? `${k.key_val.slice(0, 8)}...${k.key_val.slice(-5)}` : 'N/A',
@@ -711,10 +711,10 @@ router.get('/monitor/status', authMiddleware, (req, res) => {
   }));
 
   // Fetch agent status timestamps from conversations and logs
-  const lastFaq = db.prepare("SELECT timestamp FROM conversations WHERE agent_used IN ('router', 'faq', 'auto_resolver') ORDER BY timestamp DESC LIMIT 1").get() as any;
-  const lastBooking = db.prepare("SELECT timestamp FROM conversations WHERE agent_used = 'booking' ORDER BY timestamp DESC LIMIT 1").get() as any;
-  const lastFollowUp = db.prepare("SELECT timestamp FROM conversations WHERE agent_used IN ('follow_up', 'follow_up_scheduler', 'bulk_sender') ORDER BY timestamp DESC LIMIT 1").get() as any;
-  const lastLog = db.prepare("SELECT timestamp FROM llm_call_logs ORDER BY timestamp DESC LIMIT 1").get() as any;
+  const lastFaq = await db.prepare("SELECT timestamp FROM conversations WHERE agent_used IN ('router', 'faq', 'auto_resolver') ORDER BY timestamp DESC LIMIT 1").get() as any;
+  const lastBooking = await db.prepare("SELECT timestamp FROM conversations WHERE agent_used = 'booking' ORDER BY timestamp DESC LIMIT 1").get() as any;
+  const lastFollowUp = await db.prepare("SELECT timestamp FROM conversations WHERE agent_used IN ('follow_up', 'follow_up_scheduler', 'bulk_sender') ORDER BY timestamp DESC LIMIT 1").get() as any;
+  const lastLog = await db.prepare("SELECT timestamp FROM llm_call_logs ORDER BY timestamp DESC LIMIT 1").get() as any;
 
   const agents = [
     { name: 'FAQ Agent', description: 'Answers queries using RAG Knowledge Base.', lastActive: lastFaq?.timestamp || 'Never', status: 'Active' },
@@ -723,13 +723,13 @@ router.get('/monitor/status', authMiddleware, (req, res) => {
   ];
 
   // Fetch average latency and success rates from logs
-  const logs = db.prepare(`
+  const logs = await db.prepare(`
     SELECT provider, AVG(latency_ms) as avg_latency, 
            SUM(success) * 100.0 / COUNT(*) as success_rate 
     FROM llm_call_logs 
     WHERE timestamp >= datetime('now', '-24 hours')
     GROUP BY provider
-  `).all() as any[];
+  `).all() as any;
 
   return res.json({
     whatsapp: {
@@ -757,20 +757,20 @@ router.post('/whatsapp/restart', authMiddleware, async (req: any, res) => {
 });
 
 // 8. Analytics Stats
-router.get('/monitor/stats', authMiddleware, (req, res) => {
-  const patientsCount = (db.prepare('SELECT COUNT(*) as count FROM patients').get() as any).count;
-  const appointmentsCount = (db.prepare('SELECT COUNT(*) as count FROM appointments').get() as any).count;
-  const pendingQueriesCount = (db.prepare("SELECT COUNT(*) as count FROM pending_queries WHERE status = 'pending'").get() as any).count;
+router.get('/monitor/stats', authMiddleware, async (req, res) => {
+  const patientsCount = (await db.prepare('SELECT COUNT(*) as count FROM patients').get() as any).count;
+  const appointmentsCount = (await db.prepare('SELECT COUNT(*) as count FROM appointments').get() as any).count;
+  const pendingQueriesCount = (await db.prepare("SELECT COUNT(*) as count FROM pending_queries WHERE status = 'pending'").get() as any).count;
 
   // Follow-ups completion rates
-  const followUps = db.prepare(`
+  const followUps = await db.prepare(`
     SELECT status, COUNT(*) as count 
     FROM follow_up_jobs 
     GROUP BY status
-  `).all() as { status: string, count: number }[];
+  `).all() as any as { status: string, count: number }[];
 
   // Daily API calls in last 7 days
-  const callChart = db.prepare(`
+  const callChart = await db.prepare(`
     SELECT date(timestamp) as day, COUNT(*) as calls, SUM(success) as success 
     FROM llm_call_logs 
     WHERE timestamp >= datetime('now', '-7 days')
@@ -790,10 +790,10 @@ router.get('/monitor/stats', authMiddleware, (req, res) => {
 });
 
 // Public diagnostics endpoint (masked for privacy)
-router.get('/monitor/debug', (req, res) => {
+router.get('/monitor/debug', async (req, res) => {
   try {
-    const keys = db.prepare('SELECT id, provider, cooldown_until, usage_count, active FROM llm_keys').all() as any[];
-    const formattedKeys = keys.map(k => ({
+    const keys = await db.prepare('SELECT id, provider, cooldown_until, usage_count, active FROM llm_keys').all() as any;
+    const formattedKeys = keys.map((k: any) => ({
       id: k.id,
       provider: k.provider,
       usage: k.usage_count,
@@ -802,19 +802,19 @@ router.get('/monitor/debug', (req, res) => {
       cooldownRemainingSec: Math.max(0, Math.round((k.cooldown_until - Date.now()) / 1000))
     }));
 
-    const recentConversations = db.prepare(`
+    const recentConversations = await db.prepare(`
       SELECT patient_id, role, substr(message, 1, 60) as msg_preview, agent_used, language, timestamp 
       FROM conversations 
       ORDER BY timestamp DESC 
       LIMIT 10
-    `).all() as any[];
+    `).all() as any;
 
-    const recentLLMLogs = db.prepare(`
+    const recentLLMLogs = await db.prepare(`
       SELECT provider, latency_ms, success, substr(error, 1, 80) as error_preview, timestamp 
       FROM llm_call_logs 
       ORDER BY timestamp DESC 
       LIMIT 10
-    `).all() as any[];
+    `).all() as any;
 
     // Mask phone numbers in patient JIDs for basic privacy (e.g. 919451183429@s.whatsapp.net -> 919451XXXX@s.whatsapp.net)
     const maskJid = (jid: string) => {
@@ -826,7 +826,7 @@ router.get('/monitor/debug', (req, res) => {
       return jid;
     };
 
-    const maskedConversations = recentConversations.map(c => ({
+    const maskedConversations = recentConversations.map((c: any) => ({
       ...c,
       patient_id: maskJid(c.patient_id)
     }));
@@ -853,8 +853,8 @@ export default router;
 // ─── Follow-Up Jobs API ───────────────────────────────────────────────────────
 
 // GET all follow-up jobs with patient + doctor info
-router.get('/followups', authMiddleware, (req, res) => {
-  const jobs = db.prepare(`
+router.get('/followups', authMiddleware, async (req, res) => {
+  const jobs = await db.prepare(`
     SELECT f.id, f.patient_id, f.trigger_date, f.status, f.created_at,
            p.name as patient_name, p.phone as patient_phone,
            d.name as doctor_name
@@ -867,7 +867,7 @@ router.get('/followups', authMiddleware, (req, res) => {
 });
 
 // POST create a new follow-up job manually
-router.post('/followups', authMiddleware, (req: any, res) => {
+router.post('/followups', authMiddleware, async (req: any, res) => {
   const { patientId, doctorId, triggerDate } = req.body;
   if (!patientId || !doctorId || !triggerDate) {
     return res.status(400).json({ error: 'patientId, doctorId, triggerDate required' });
@@ -877,7 +877,7 @@ router.post('/followups', authMiddleware, (req: any, res) => {
   const cleanTriggerDate = triggerDate.replace('T', ' ');
   
   try {
-    const result = db.prepare(`
+    const result = await db.prepare(`
       INSERT INTO follow_up_jobs (patient_id, doctor_id, trigger_date, message_template, status)
       VALUES (?, ?, ?, 'medicine_reminder', 'pending')
     `).run(patientId, doctorId, cleanTriggerDate);
@@ -894,11 +894,11 @@ router.post('/followups/bulk', authMiddleware, async (req: any, res) => {
     return res.status(400).json({ error: 'patientIds (array) and message (string) are required' });
   }
 
-  const results = { success: 0, failed: 0, errors: [] as string[] };
+  const results = { success: 0, failed: 0, errors: [] as any };
 
   for (const patientId of patientIds) {
     try {
-      const patient = db.prepare('SELECT id FROM patients WHERE id = ?').get(patientId) as any;
+      const patient = await db.prepare('SELECT id FROM patients WHERE id = ?').get(patientId) as any;
       if (!patient) {
         throw new Error(`Patient ${patientId} not found`);
       }

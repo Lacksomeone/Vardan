@@ -11,9 +11,8 @@ export class LLMGateway {
   private static instance: LLMGateway;
   private keys: LLMKeyRecord[] = [];
 
-  private constructor() {
-    this.reloadKeys();
-  }
+  private constructor() { }
+  public async initialize(): Promise<void> { await this.reloadKeys(); }
 
   public static getInstance(): LLMGateway {
     if (!LLMGateway.instance) {
@@ -23,8 +22,8 @@ export class LLMGateway {
   }
 
   // Reload keys from SQLite DB
-  public reloadKeys(): void {
-    const records = db.prepare('SELECT * FROM llm_keys WHERE active = 1').all() as LLMKeyRecord[];
+  public async reloadKeys(): Promise<void> {
+    const records = await db.prepare('SELECT * FROM llm_keys WHERE active = 1').all() as any;
     this.keys = records;
     console.log(`Loaded ${this.keys.length} active LLM keys from database.`);
   }
@@ -72,27 +71,27 @@ export class LLMGateway {
   }
 
   // Put a key on cooldown in memory and SQLite DB
-  private setCooldown(keyId: number, durationMs: number = 60000): void {
+  private async setCooldown(keyId: number, durationMs: number = 60000): Promise<void> {
     const cooldownTime = Date.now() + durationMs;
     const key = this.keys.find((k) => k.id === keyId);
     if (key) {
       key.cooldown_until = cooldownTime;
     }
-    db.prepare('UPDATE llm_keys SET cooldown_until = ? WHERE id = ?').run(cooldownTime, keyId);
+    await db.prepare('UPDATE llm_keys SET cooldown_until = ? WHERE id = ?').run(cooldownTime, keyId);
   }
 
   // Increment usage count of a key
-  private incrementUsage(keyId: number): void {
+  private async incrementUsage(keyId: number): Promise<void> {
     const key = this.keys.find((k) => k.id === keyId);
     if (key) {
       key.usage_count += 1;
     }
-    db.prepare('UPDATE llm_keys SET usage_count = usage_count + 1 WHERE id = ?').run(keyId);
+    await db.prepare('UPDATE llm_keys SET usage_count = usage_count + 1 WHERE id = ?').run(keyId);
   }
 
   // Log LLM call outcome in DB
-  private logCall(provider: string, keyIndex: number, latencyMs: number, success: boolean, error?: string): void {
-    db.prepare(`
+  private async logCall(provider: string, keyIndex: number, latencyMs: number, success: boolean, error?: string): Promise<void> {
+    await db.prepare(`
       INSERT INTO llm_call_logs (provider, key_index, latency_ms, success, error)
       VALUES (?, ?, ?, ?, ?)
     `).run(provider, keyIndex, latencyMs, success ? 1 : 0, error || null);
@@ -103,7 +102,7 @@ export class LLMGateway {
     preferredProvider: 'groq' | 'gemini' | 'openrouter',
     params: LLMCallParams
   ): Promise<string> {
-    this.reloadKeys(); // Refresh latest cooldowns
+    await this.reloadKeys(); // Refresh latest cooldowns
     
     // Pick the best key from each active provider to race in parallel (no rotation, simultaneous fetch)
     const keysBatch = this.pickMultiProviderBatch();
@@ -137,8 +136,8 @@ export class LLMGateway {
         const latency = Date.now() - start;
 
         // Success: log usage & latency
-        this.incrementUsage(keyRecord.id);
-        this.logCall(keyRecord.provider, keyRecord.id, latency, true);
+        await this.incrementUsage(keyRecord.id);
+        await this.logCall(keyRecord.provider, keyRecord.id, latency, true);
         return { provider: keyRecord.provider, content: response, latency } as RaceResult;
       } catch (err: any) {
         if (controller.signal.aborted || err.name === 'AbortError' || err.message?.includes('aborted')) {
@@ -150,8 +149,8 @@ export class LLMGateway {
         const errorMsg = err.message || String(err);
         
         // Key failed (rate limit/timeout) -> Cooldown key
-        this.setCooldown(keyRecord.id, 60000);
-        this.logCall(keyRecord.provider, keyRecord.id, latency, false, errorMsg);
+        await this.setCooldown(keyRecord.id, 60000);
+        await this.logCall(keyRecord.provider, keyRecord.id, latency, false, errorMsg);
         throw err;
       }
     });
@@ -211,7 +210,7 @@ export class LLMGateway {
       console.warn('All keys in the parallel batch failed. Retrying with backup key...');
       
       // Fallback: Pick next available key sequentially
-      this.reloadKeys();
+      await this.reloadKeys();
       const fallbackKeys = this.pickSingleBackupKey();
       if (fallbackKeys.length > 0) {
         return this.runSingleKeyWithRetry(fallbackKeys[0], params);
@@ -235,14 +234,14 @@ export class LLMGateway {
         controller
       );
       const latency = Date.now() - start;
-      this.incrementUsage(keyRecord.id);
-      this.logCall(keyRecord.provider, keyRecord.id, latency, true);
+      await this.incrementUsage(keyRecord.id);
+      await this.logCall(keyRecord.provider, keyRecord.id, latency, true);
       return response;
     } catch (err: any) {
       const latency = Date.now() - start;
       const errorMsg = err.message || String(err);
-      this.setCooldown(keyRecord.id, 60000);
-      this.logCall(keyRecord.provider, keyRecord.id, latency, false, errorMsg);
+      await this.setCooldown(keyRecord.id, 60000);
+      await this.logCall(keyRecord.provider, keyRecord.id, latency, false, errorMsg);
       throw err;
     }
   }
@@ -380,7 +379,7 @@ export class LLMGateway {
     systemPrompt: string,
     userPrompt: string
   ): Promise<string> {
-    this.reloadKeys();
+    await this.reloadKeys();
     const geminiKeys = this.keys.filter(
       (k) => k.provider === 'gemini' && k.active === 1 && k.cooldown_until < Date.now()
     );
@@ -444,13 +443,13 @@ export class LLMGateway {
       const data = await response.json() as any;
       const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
 
-      this.incrementUsage(keyRecord.id);
-      this.logCall(keyRecord.provider, keyRecord.id, Date.now() - start, true);
+      await this.incrementUsage(keyRecord.id);
+      await this.logCall(keyRecord.provider, keyRecord.id, Date.now() - start, true);
       return text;
     } catch (err: any) {
       clearTimeout(timeoutId);
-      this.setCooldown(keyRecord.id, 60000);
-      this.logCall(keyRecord.provider, keyRecord.id, Date.now() - start, false, err.message || String(err));
+      await this.setCooldown(keyRecord.id, 60000);
+      await this.logCall(keyRecord.provider, keyRecord.id, Date.now() - start, false, err.message || String(err));
       throw err;
     }
   }
@@ -460,7 +459,7 @@ export class LLMGateway {
     base64Data: string,
     mimeType: string
   ): Promise<string> {
-    this.reloadKeys();
+    await this.reloadKeys();
     const geminiKeys = this.keys.filter(
       (k) => k.provider === 'gemini' && k.active === 1 && k.cooldown_until < Date.now()
     );
@@ -526,13 +525,13 @@ export class LLMGateway {
       const data = await response.json() as any;
       const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
 
-      this.incrementUsage(keyRecord.id);
-      this.logCall(keyRecord.provider, keyRecord.id, Date.now() - start, true);
+      await this.incrementUsage(keyRecord.id);
+      await this.logCall(keyRecord.provider, keyRecord.id, Date.now() - start, true);
       return text.trim();
     } catch (err: any) {
       clearTimeout(timeoutId);
-      this.setCooldown(keyRecord.id, 60000);
-      this.logCall(keyRecord.provider, keyRecord.id, Date.now() - start, false, err.message || String(err));
+      await this.setCooldown(keyRecord.id, 60000);
+      await this.logCall(keyRecord.provider, keyRecord.id, Date.now() - start, false, err.message || String(err));
       throw err;
     }
   }

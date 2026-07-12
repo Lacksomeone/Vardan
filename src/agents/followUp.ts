@@ -5,7 +5,7 @@ import { handleBookingQuery } from './booking.js';
 
 export async function handleFollowUpResponse(patientId: string, text: string, lang: 'hi' | 'en' | 'hinglish') {
   // 1. Find the latest sent/pending follow-up job for this patient
-  const job = db.prepare(`
+  const job = await db.prepare(`
     SELECT * FROM follow_up_jobs 
     WHERE patient_id = ? AND status IN ('sent', 'pending')
     ORDER BY created_at DESC LIMIT 1
@@ -13,7 +13,7 @@ export async function handleFollowUpResponse(patientId: string, text: string, la
 
   if (job) {
     // Update status to responded
-    db.prepare("UPDATE follow_up_jobs SET status = 'responded' WHERE id = ?").run(job.id);
+    await db.prepare("UPDATE follow_up_jobs SET status = 'responded' WHERE id = ?").run(job.id);
   }
 
   // 2. Classify response using LLM:
@@ -55,7 +55,7 @@ Format output as strict JSON:
       en: 'We are concerned about your health. It seems you need to consult the doctor. Let us book an appointment for you.'
     };
     
-    db.prepare(`
+    await db.prepare(`
       INSERT INTO conversations (patient_id, role, message, agent_used, language)
       VALUES (?, ?, ?, ?, ?)
     `).run(patientId, 'bot', bookingInvite[lang], 'follow_up', lang);
@@ -72,7 +72,7 @@ Format output as strict JSON:
       en: 'Great to hear that you are feeling better! Vardan Hospital wishes you excellent health. If you need any assistance in the future, please feel free to reach out.'
     };
 
-    db.prepare(`
+    await db.prepare(`
       INSERT INTO conversations (patient_id, role, message, agent_used, language)
       VALUES (?, ?, ?, ?, ?)
     `).run(patientId, 'bot', wellWishes[lang], 'follow_up', lang);

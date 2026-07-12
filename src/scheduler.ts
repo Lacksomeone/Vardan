@@ -10,7 +10,7 @@ export async function runSchedulerCheck() {
   const nowISTStr = new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Kolkata' }).substring(0, 16);
   
   // 1. Process PENDING jobs scheduled for today or earlier
-  const pendingJobs = db.prepare(`
+  const pendingJobs = await db.prepare(`
     SELECT f.*, 
            p.name as patient_name, p.phone as patient_phone, p.preferred_language,
            d.name as doctor_name, d.phone as doctor_phone, d.department as doctor_dept
@@ -21,7 +21,7 @@ export async function runSchedulerCheck() {
       f.trigger_date <= ? OR 
       (length(f.trigger_date) = 10 AND f.trigger_date <= substring(?, 1, 10))
     )
-  `).all(nowISTStr, nowISTStr) as any[];
+  `).all(nowISTStr, nowISTStr) as any;
 
   for (const job of pendingJobs) {
     try {
@@ -42,13 +42,13 @@ export async function runSchedulerCheck() {
       await sendTextMessage(job.patient_id, message);
 
       // Log in conversations
-      db.prepare(`
+      await db.prepare(`
         INSERT INTO conversations (patient_id, role, message, agent_used, language)
         VALUES (?, 'bot', ?, 'follow_up_scheduler', ?)
       `).run(job.patient_id, message, lang);
 
       // Mark as sent
-      db.prepare("UPDATE follow_up_jobs SET status = 'sent' WHERE id = ?").run(job.id);
+      await db.prepare("UPDATE follow_up_jobs SET status = 'sent' WHERE id = ?").run(job.id);
       console.log(`[Scheduler] ✅ Follow-up sent to: ${name} (${job.patient_id})`);
 
     } catch (err) {
@@ -59,7 +59,7 @@ export async function runSchedulerCheck() {
   // 2. Escalation: SENT jobs with no patient reply after 24 hours → alert doctor
   const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
   
-  const sentJobs = db.prepare(`
+  const sentJobs = await db.prepare(`
     SELECT f.*, 
            p.name as patient_name, p.phone as patient_phone, p.age as patient_age,
            d.name as doctor_name, d.phone as doctor_phone
@@ -67,18 +67,18 @@ export async function runSchedulerCheck() {
     JOIN patients p ON f.patient_id = p.id
     JOIN doctors d ON f.doctor_id = d.id
     WHERE f.status = 'sent' AND f.created_at <= ?
-  `).all(twentyFourHoursAgo) as any[];
+  `).all(twentyFourHoursAgo) as any;
 
   for (const job of sentJobs) {
     try {
       // Check if patient replied after reminder was sent
-      const patientReply = db.prepare(`
+      const patientReply = await db.prepare(`
         SELECT COUNT(*) as count FROM conversations 
         WHERE patient_id = ? AND role = 'patient' AND timestamp > ?
-      `).get(job.patient_id, job.created_at) as { count: number };
+      `).get(job.patient_id, job.created_at) as any as { count: number };
 
       if (patientReply.count > 0) {
-        db.prepare("UPDATE follow_up_jobs SET status = 'responded' WHERE id = ?").run(job.id);
+        await db.prepare("UPDATE follow_up_jobs SET status = 'responded' WHERE id = ?").run(job.id);
         console.log(`[Scheduler] Job ${job.id} marked responded.`);
         continue;
       }
@@ -94,7 +94,7 @@ Please check on this patient at the earliest.
 — Vardan Hospital Bot`;
       
       await sendTextMessage(job.doctor_phone, doctorAlert);
-      db.prepare("UPDATE follow_up_jobs SET status = 'escalated' WHERE id = ?").run(job.id);
+      await db.prepare("UPDATE follow_up_jobs SET status = 'escalated' WHERE id = ?").run(job.id);
       console.log(`[Scheduler] ⚠️ Escalated to Dr. ${job.doctor_name} for patient ${job.patient_name}`);
 
     } catch (err) {

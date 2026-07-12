@@ -25,12 +25,12 @@ async function runSelfHealingAgent() {
 
   try {
     // 1. Check if all LLM keys are in cooldown
-    const totalKeys = db.prepare('SELECT COUNT(*) as count FROM llm_keys WHERE active = 1').get() as { count: number };
-    const cooldownKeys = db.prepare('SELECT COUNT(*) as count FROM llm_keys WHERE active = 1 AND cooldown_until > ?').get(Date.now()) as { count: number };
+    const totalKeys = await db.prepare('SELECT COUNT(*) as count FROM llm_keys WHERE active = 1').get() as any as { count: number };
+    const cooldownKeys = await db.prepare('SELECT COUNT(*) as count FROM llm_keys WHERE active = 1 AND cooldown_until > ?').get(Date.now()) as any as { count: number };
 
     if (totalKeys.count > 0 && totalKeys.count === cooldownKeys.count) {
       console.log('[System Monitor] All LLM keys in cooldown. Force resetting cooldowns...');
-      db.prepare('UPDATE llm_keys SET cooldown_until = 0 WHERE active = 1').run();
+      await db.prepare('UPDATE llm_keys SET cooldown_until = 0 WHERE active = 1').run();
       await sendAlertToAdmin('🔧 *Self-Healing Action:* All LLM keys were in cooldown. Cooldowns have been reset to restore service.');
     }
 
@@ -51,7 +51,7 @@ async function runSelfHealingAgent() {
 
     // 3. Check SQLite Database Locks
     try {
-      db.prepare('SELECT COUNT(*) FROM sqlite_master').get();
+      await db.prepare('SELECT COUNT(*) FROM sqlite_master').get();
     } catch (dbErr: any) {
       if (dbErr.message?.includes('database is locked') || dbErr.message?.includes('busy')) {
         console.log('[System Monitor] Database locked state detected. Running checkpoint...');
@@ -65,15 +65,15 @@ async function runSelfHealingAgent() {
     }
 
     // 4. Scan recent LLM call logs for errors
-    const logs = db.prepare(`
+    const logs = await db.prepare(`
       SELECT error, provider, timestamp 
       FROM llm_call_logs 
       WHERE success = 0 AND timestamp >= datetime('now', '-30 minutes')
       ORDER BY timestamp DESC LIMIT 5
-    `).all() as any[];
+    `).all() as any;
 
     if (logs.length >= 3) {
-      const errorDetails = logs.map(f => `[${f.timestamp}] ${f.provider}: ${f.error}`).join('\n');
+      const errorDetails = logs.map((f: any) => `[${f.timestamp}] ${f.provider}: ${f.error}`).join('\n');
       console.log('[System Monitor] Recurring errors detected. Notifying admin...');
       await sendAlertToAdmin(`🚨 *VardanAI Error Warning:* Multiple recent failures detected in the last 30 minutes.\n\n*Recent Errors:*\n\`\`\`\n${errorDetails}\n\`\`\``);
     }
