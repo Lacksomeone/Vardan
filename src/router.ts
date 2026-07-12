@@ -139,8 +139,16 @@ function classifyHeuristically(text: string): 'booking' | 'faq' | 'followup' | '
 }
 
 export async function handleIncomingMessage(msg: proto.IWebMessageInfo) {
-  const patientId = msg.key.remoteJid;
+  let patientId = msg.key.remoteJid;
   if (!patientId) return;
+
+  // Normalize @lid JID (WhatsApp Multi-Device) to standard @s.whatsapp.net format
+  if (patientId.endsWith('@lid')) {
+    patientId = patientId.replace('@lid', '@s.whatsapp.net');
+    console.log(`[Router] Normalized @lid JID → ${patientId}`);
+  }
+
+  console.log(`[Router] 🔄 Processing message from: ${patientId}`);
 
   const imageMsg = msg.message?.imageMessage;
   const audioMsg = msg.message?.audioMessage;

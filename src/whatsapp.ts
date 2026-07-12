@@ -201,11 +201,34 @@ export async function sendTextMessage(toJid: string, text: string) {
   if (!sock || connectionStatus !== 'connected') {
     throw new Error('WhatsApp not connected');
   }
-  let jid = toJid.includes('@') ? toJid : `${toJid}@s.whatsapp.net`;
+  
+  let jid = toJid;
+  
+  // Convert @lid (WhatsApp Multi-Device internal format) to @s.whatsapp.net
+  if (jid.endsWith('@lid')) {
+    const numericPart = jid.replace('@lid', '');
+    jid = `${numericPart}@s.whatsapp.net`;
+    console.log(`[WhatsApp] Converted @lid JID: ${toJid} → ${jid}`);
+  }
+  
+  // Append @s.whatsapp.net if no domain suffix
+  if (!jid.includes('@')) {
+    jid = `${jid}@s.whatsapp.net`;
+  }
+  
+  // Strip leading + (e.g., +919451183429)
   if (jid.startsWith('+')) {
     jid = jid.substring(1);
   }
-  await sock.sendMessage(jid, { text });
+
+  console.log(`[WhatsApp] 📤 Sending message to: ${jid}`);
+  try {
+    await sock.sendMessage(jid, { text });
+    console.log(`[WhatsApp] ✅ Message sent successfully to: ${jid}`);
+  } catch (err: any) {
+    console.error(`[WhatsApp] ❌ sendMessage FAILED to ${jid}:`, err?.message || err);
+    throw err;
+  }
 
   // Log outgoing message to conversations table if recipient is a patient
   try {
