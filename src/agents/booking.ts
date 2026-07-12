@@ -10,6 +10,7 @@ interface BookingSession {
   timeSlot?: string;
   action: 'book' | 'cancel' | 'reschedule';
   appointmentIdToModify?: number;
+  patientRelation?: string;
 }
 
 const bookingSessions: Record<string, BookingSession> = {};
