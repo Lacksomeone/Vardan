@@ -119,11 +119,5 @@ export function initializeMonitor() {
     process.exit(1);
   });
 
-  // Start background self-healing monitor check loop (every 2 minutes)
-  setInterval(() => {
-    runSelfHealingAgent().catch(err => console.error('[System Monitor] Background run failed:', err));
-  }, 2 * 60 * 1000);
-
   console.log('[Monitor] ✅ Active and monitoring for runtime crashes.');
-  console.log('[System Monitor] ✅ Active and running self-healing checks in background.');
 }
