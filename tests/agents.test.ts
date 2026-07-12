@@ -13,14 +13,26 @@ import { handleIncomingMessage, clearRegSession } from '../src/router.js';
 
 describe('Agent and Router Tests', () => {
   let originalGetChatCompletion: any;
+  let originalAnalyzeDocument: any;
   let llmMockResponse: string = '';
+  let llmDocMockResponse: string = '';
 
   before(() => {
     originalGetChatCompletion = LLMGateway.prototype.getChatCompletion;
+    originalAnalyzeDocument = LLMGateway.prototype.analyzeDocument;
     
-    // Stub the LLM completion method
+    // Stub the LLM completion methods
     LLMGateway.prototype.getChatCompletion = async function (provider: string, params: any): Promise<string> {
       return llmMockResponse;
+    };
+
+    LLMGateway.prototype.analyzeDocument = async function (
+      base64Data: string,
+      mimeType: string,
+      systemPrompt: string,
+      userPrompt: string
+    ): Promise<string> {
+      return llmDocMockResponse;
     };
 
     // Initialize tables and clean up in correct foreign key order
@@ -55,6 +67,7 @@ describe('Agent and Router Tests', () => {
 
   after(() => {
     LLMGateway.prototype.getChatCompletion = originalGetChatCompletion;
+    LLMGateway.prototype.analyzeDocument = originalAnalyzeDocument;
   });
 
   // ─── FAQ Agent Tests ───────────────────────────────────────────────────────
@@ -351,6 +364,91 @@ describe('Agent and Router Tests', () => {
       assert.strictEqual(patient.age, 12);
       assert.strictEqual(patient.gender, 'Male');
       assert.strictEqual(patient.phone, '9451183428');
+    });
+
+    it('should automatically register an unregistered patient from an uploaded image via OCR', async () => {
+      const ocrPatientId = '919451183427@s.whatsapp.net';
+      clearRegSession(ocrPatientId);
+      db.prepare('DELETE FROM patients WHERE id = ?').run(ocrPatientId);
+
+      // Mock OCR document analysis output
+      llmDocMockResponse = JSON.stringify({
+        name: 'John Doe',
+        age: 35,
+        gender: 'Male',
+        phone: '9451183427'
+      });
+
+      // Send image message
+      await handleIncomingMessage({
+        key: { remoteJid: ocrPatientId, id: 'img1' },
+        message: { 
+          imageMessage: { 
+            mimetype: 'image/jpeg'
+          }
+        }
+      });
+
+      // Verify patient is automatically registered
+      const patient = db.prepare('SELECT * FROM patients WHERE id = ?').get(ocrPatientId) as any;
+      assert.ok(patient, 'Patient should be automatically registered');
+      assert.strictEqual(patient.name, 'John Doe');
+      assert.strictEqual(patient.age, 35);
+      assert.strictEqual(patient.gender, 'Male');
+      assert.strictEqual(patient.phone, '9451183427');
+    });
+
+    it('should fallback to manual language selection if OCR registration fails to extract details', async () => {
+      const fallbackPatientId = '919451183426@s.whatsapp.net';
+      clearRegSession(fallbackPatientId);
+      db.prepare('DELETE FROM patients WHERE id = ?').run(fallbackPatientId);
+
+      // Mock OCR document analysis to fail to extract name/age
+      llmDocMockResponse = JSON.stringify({
+        name: null,
+        age: null,
+        gender: null,
+        phone: null
+      });
+
+      // Send image message
+      await handleIncomingMessage({
+        key: { remoteJid: fallbackPatientId, id: 'img2' },
+        message: { 
+          imageMessage: { 
+            mimetype: 'image/jpeg'
+          }
+        }
+      });
+
+      // Verify patient is NOT registered yet
+      let patient = db.prepare('SELECT * FROM patients WHERE id = ?').get(fallbackPatientId) as any;
+      assert.ok(!patient, 'Patient should not be registered');
+
+      // Send '2' to select English language, which is only possible if we fell back to lang_select stage
+      await handleIncomingMessage({
+        key: { remoteJid: fallbackPatientId, id: 'c2' },
+        message: { conversation: '2' }
+      });
+
+      // Send details to complete registration manually
+      llmMockResponse = JSON.stringify({
+        name: 'Manual Jane',
+        age: 28,
+        gender: 'Female',
+        phone: '9451183426'
+      });
+
+      await handleIncomingMessage({
+        key: { remoteJid: fallbackPatientId, id: 'c3' },
+        message: { conversation: 'My name is Manual Jane, 28, Female' }
+      });
+
+      // Now verify patient is registered manually!
+      patient = db.prepare('SELECT * FROM patients WHERE id = ?').get(fallbackPatientId) as any;
+      assert.ok(patient, 'Patient should be registered manually');
+      assert.strictEqual(patient.name, 'Manual Jane');
+      assert.strictEqual(patient.age, 28);
     });
   });
 

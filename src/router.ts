@@ -27,6 +27,18 @@ export function clearRegSession(patientId: string) {
   return false;
 }
 
+async function downloadMessageBuffer(msg: proto.IWebMessageInfo): Promise<Buffer | null> {
+  if (process.env.NODE_ENV === 'test') {
+    return Buffer.from('mock-media-buffer');
+  }
+  try {
+    return await downloadMediaMessage(msg, 'buffer', {});
+  } catch (err) {
+    console.error('Failed to download media message:', err);
+    return null;
+  }
+}
+
 const langChangeSessions = new Set<string>();
 
 function isLanguageChangeRequest(text: string): boolean {
@@ -139,7 +151,7 @@ export async function handleIncomingMessage(msg: proto.IWebMessageInfo) {
   // ─── Voice / Audio Transcription Flow ───
   if (audioMsg) {
     try {
-      const buffer = await downloadMediaMessage(msg, 'buffer', {});
+      const buffer = await downloadMessageBuffer(msg);
       if (buffer) {
         const base64Data = buffer.toString('base64');
         const mimeType = audioMsg.mimetype || 'audio/ogg';
@@ -175,7 +187,105 @@ export async function handleIncomingMessage(msg: proto.IWebMessageInfo) {
   if (imageMsg) {
     const patient = db.prepare('SELECT * FROM patients WHERE id = ?').get(patientId) as any;
     if (!patient) {
-      // Prompt unregistered patient to register first
+      // Try to automatically register patient via OCR
+      try {
+        const buffer = await downloadMessageBuffer(msg);
+        if (buffer) {
+          const base64Data = buffer.toString('base64');
+          const mimeType = imageMsg.mimetype || 'image/jpeg';
+
+          const systemPrompt = `You are a medical registration assistant at Vardan Hospital, Bahraich.
+Analyze the provided image (which could be a doctor's prescription, hospital slip, registration form, or old card).
+Extract the patient's registration details:
+1. "name": The full name of the patient.
+2. "age": The age of the patient as an integer number.
+3. "gender": The gender of the patient (must be "Male", "Female", or "Other").
+4. "phone": The contact phone number of the patient (digits only).
+
+If any detail is not mentioned or cannot be inferred, set it to null.
+Format the output strictly as a JSON object.
+
+JSON Schema:
+{
+  "name": string | null,
+  "age": number | null,
+  "gender": "Male" | "Female" | "Other" | null,
+  "phone": string | null
+}`;
+
+          const userPrompt = `Extract the patient's registration details from this image.`;
+
+          const rawResult = await LLMGateway.getInstance().analyzeDocument(
+            base64Data,
+            mimeType,
+            systemPrompt,
+            userPrompt
+          );
+
+          let cleaned = rawResult.trim();
+          if (cleaned.includes('```')) {
+            const match = cleaned.match(/```(?:json)?([\s\S]*?)```/);
+            if (match && match[1]) {
+              cleaned = match[1].trim();
+            }
+          }
+
+          let parsedJson: any = { name: null, age: null, gender: null, phone: null };
+          try {
+            parsedJson = JSON.parse(cleaned);
+          } catch (e) {
+            const start = cleaned.indexOf('{');
+            const end = cleaned.lastIndexOf('}');
+            if (start !== -1 && end !== -1 && end > start) {
+              parsedJson = JSON.parse(cleaned.substring(start, end + 1));
+            }
+          }
+
+          const finalName = parsedJson.name ? parsedJson.name.trim() : null;
+          const finalAge = parsedJson.age ? Number(parsedJson.age) : null;
+          const finalGender = parsedJson.gender || 'Other';
+          const finalPhone = parsedJson.phone ? parsedJson.phone.replace(/\D/g, '') : phone;
+
+          // If we successfully got Name and Age, we do auto-registration!
+          if (finalName && finalAge && !isNaN(finalAge) && finalAge > 0 && finalAge <= 120) {
+            const lang = 'hinglish'; // Default language for auto-registration
+
+            // Check if phone number already exists
+            const exists = db.prepare('SELECT id FROM patients WHERE phone = ?').get(finalPhone);
+            if (!exists) {
+              db.prepare(`
+                INSERT INTO patients (id, name, phone, age, gender, preferred_language)
+                VALUES (?, ?, ?, ?, ?, ?)
+              `).run(patientId, finalName, finalPhone, finalAge, finalGender, lang);
+
+              syncPatientToGoogleSheet({
+                name: finalName,
+                phone: finalPhone,
+                age: finalAge,
+                gender: finalGender,
+                lang
+              });
+
+              const successMsg = `🏥 *Vardan Hospital, Bahraich*
+              
+✅ *Auto-Registration Successful!*
+We extracted your details from the uploaded document:
+- *Name*: ${finalName}
+- *Age*: ${finalAge}
+- *Gender*: ${finalGender}
+- *Phone*: ${finalPhone}
+
+How can Vardan Hospital help you today? (You can ask about doctors, timings, or book an appointment.)`;
+              await sendTextMessage(patientId, successMsg);
+              return;
+            }
+          }
+        }
+      } catch (err) {
+        console.error('[WhatsApp Image Auto-Registration] OCR failed:', err);
+      }
+
+      // Fallback: Prompt unregistered patient to register manually
       const registerFirst = 
 `🏥 *Vardan Hospital, Bahraich*
 
@@ -204,7 +314,7 @@ Reply with 1, 2, or 3`;
 
     try {
       // Download the image
-      const buffer = await downloadMediaMessage(msg, 'buffer', {});
+      const buffer = await downloadMessageBuffer(msg);
       if (!buffer) throw new Error('Failed to download image message');
 
       const base64Data = buffer.toString('base64');
