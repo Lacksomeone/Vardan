@@ -790,6 +790,65 @@ router.get('/monitor/stats', authMiddleware, (req, res) => {
   });
 });
 
+// Public diagnostics endpoint (masked for privacy)
+router.get('/monitor/debug', (req, res) => {
+  try {
+    const keys = db.prepare('SELECT id, provider, cooldown_until, usage_count, active FROM llm_keys').all() as any[];
+    const formattedKeys = keys.map(k => ({
+      id: k.id,
+      provider: k.provider,
+      usage: k.usage_count,
+      active: k.active,
+      coolingDown: k.cooldown_until > Date.now(),
+      cooldownRemainingSec: Math.max(0, Math.round((k.cooldown_until - Date.now()) / 1000))
+    }));
+
+    const recentConversations = db.prepare(`
+      SELECT patient_id, role, substr(message, 1, 60) as msg_preview, agent_used, language, timestamp 
+      FROM conversations 
+      ORDER BY timestamp DESC 
+      LIMIT 10
+    `).all() as any[];
+
+    const recentLLMLogs = db.prepare(`
+      SELECT provider, latency_ms, success, substr(error_message, 1, 80) as error_preview, timestamp 
+      FROM llm_call_logs 
+      ORDER BY timestamp DESC 
+      LIMIT 10
+    `).all() as any[];
+
+    // Mask phone numbers in patient JIDs for basic privacy (e.g. 919451183429@s.whatsapp.net -> 919451XXXX@s.whatsapp.net)
+    const maskJid = (jid: string) => {
+      if (!jid) return 'N/A';
+      const parts = jid.split('@');
+      if (parts[0] && parts[0].length > 6) {
+        return `${parts[0].slice(0, 6)}XXXX@${parts[1] || 's.whatsapp.net'}`;
+      }
+      return jid;
+    };
+
+    const maskedConversations = recentConversations.map(c => ({
+      ...c,
+      patient_id: maskJid(c.patient_id)
+    }));
+
+    return res.json({
+      whatsapp: {
+        status: connectionStatus,
+        qrAvailable: !!qrCodeStr,
+        pairingCode: pairingCode,
+        lastError: lastError
+      },
+      systemTime: new Date().toISOString(),
+      keysSummary: formattedKeys,
+      recentConversations: maskedConversations,
+      recentLLMLogs
+    });
+  } catch (err: any) {
+    return res.json({ error: err.message });
+  }
+});
+
 export default router;
 
 // ─── Follow-Up Jobs API ───────────────────────────────────────────────────────

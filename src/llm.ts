@@ -284,7 +284,7 @@ export class LLMGateway {
 
       } else if (provider === 'gemini') {
         const response = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=${apiKey}`,
+          `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
           {
 
             method: 'POST',
@@ -386,7 +386,7 @@ export class LLMGateway {
       const cleanBase64 = base64Data.replace(/^data:[^;]+;base64,/, '');
 
       const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=${keyRecord.key_val}`,
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${keyRecord.key_val}`,
         {
           method: 'POST',
           headers: {
@@ -472,7 +472,7 @@ export class LLMGateway {
       }
 
       const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=${keyRecord.key_val}`,
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${keyRecord.key_val}`,
         {
           method: 'POST',
           headers: {
