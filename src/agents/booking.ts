@@ -317,7 +317,7 @@ Format your output as a strict JSON object matching this schema:
   "relation": string | null
 }`;
 
-        const responseStr = await LLMGateway.getInstance().getChatCompletion('openrouter', {
+        const responseStr = await LLMGateway.getInstance().getChatCompletion('gemini', {
           systemPrompt,
           userPrompt: text,
           responseFormatJson: true
@@ -446,7 +446,7 @@ Guidelines:
 Format your output as a strict JSON object matching this schema:
 {"doctorId": number | null}`;
 
-        const responseStr = await LLMGateway.getInstance().getChatCompletion('openrouter', {
+        const responseStr = await LLMGateway.getInstance().getChatCompletion('gemini', {
           systemPrompt,
           userPrompt: text,
           responseFormatJson: true

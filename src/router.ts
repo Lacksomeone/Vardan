@@ -586,7 +586,7 @@ JSON Schema:
   let detectedLang = patient.preferred_language || 'en';
 
   try {
-    const routingResultStr = await llmGateway.getChatCompletion('openrouter', {
+    const routingResultStr = await llmGateway.getChatCompletion('gemini', {
       systemPrompt,
       userPrompt: text,
       responseFormatJson: true

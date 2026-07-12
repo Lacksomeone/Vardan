@@ -330,7 +330,7 @@ export class LLMGateway {
             'X-Title': 'VardanAI'
           },
           body: JSON.stringify({
-            model: 'deepseek/deepseek-r1:free',
+            model: 'google/gemini-2.5-flash',
             messages: [
               { role: 'system', content: params.systemPrompt },
               { role: 'user', content: params.userPrompt }

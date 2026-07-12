@@ -36,7 +36,7 @@ Format output as strict JSON:
   const llmGateway = LLMGateway.getInstance();
   let status = 'recovered';
   try {
-    const resultStr = await llmGateway.getChatCompletion('openrouter', {
+    const resultStr = await llmGateway.getChatCompletion('gemini', {
       systemPrompt,
       userPrompt: text,
       responseFormatJson: true
