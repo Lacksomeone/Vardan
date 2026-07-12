@@ -1,539 +1,127 @@
-import db from './db.js';
-import { LLMKeyRecord } from './types.js';
+import { db } from './db.js';
 
-interface LLMCallParams {
-  systemPrompt: string;
-  userPrompt: string;
-  responseFormatJson?: boolean;
+interface ProviderKeys {
+  groq: string[];
+  gemini: string[];
+  openrouter: string[];
 }
 
 export class LLMGateway {
-  private static instance: LLMGateway;
-  private keys: LLMKeyRecord[] = [];
+  private keys: ProviderKeys = { groq: [], gemini: [], openrouter: [] };
 
-  private constructor() { }
-  public async initialize(): Promise<void> { await this.reloadKeys(); }
+  constructor() {}
 
-  public static getInstance(): LLMGateway {
-    if (!LLMGateway.instance) {
-      LLMGateway.instance = new LLMGateway();
-    }
-    return LLMGateway.instance;
-  }
-
-  // Reload keys from SQLite DB
-  public async reloadKeys(): Promise<void> {
-    const records = await db.prepare('SELECT * FROM llm_keys WHERE active = 1').all() as any;
-    this.keys = records;
-    console.log(`Loaded ${this.keys.length} active LLM keys from database.`);
-  }
-
-  // Pick the best key for each active provider to race in parallel
-  private pickMultiProviderBatch(): LLMKeyRecord[] {
-    const now = Date.now();
-    const availableKeys = this.keys.filter(
-      (k) => k.cooldown_until < now && k.active === 1
-    );
-
-    if (availableKeys.length === 0) {
-      return [];
-    }
-
-    // Group keys by provider
-    const providerKeys: Record<string, LLMKeyRecord[]> = {};
-    for (const key of availableKeys) {
-      if (!providerKeys[key.provider]) {
-        providerKeys[key.provider] = [];
-      }
-      providerKeys[key.provider].push(key);
-    }
-
-    const batch: LLMKeyRecord[] = [];
-    // From each provider group, select the one with the lowest usage count (least used)
-    for (const provider of Object.keys(providerKeys)) {
-      const keysForProvider = providerKeys[provider];
-      keysForProvider.sort((a, b) => a.usage_count - b.usage_count);
-      batch.push(keysForProvider[0]);
-    }
-
-    return batch;
-  }
-
-  // Backup fallback key picker (least used single key)
-  private pickSingleBackupKey(): LLMKeyRecord[] {
-    const now = Date.now();
-    const availableKeys = this.keys.filter(
-      (k) => k.cooldown_until < now && k.active === 1
-    );
-    if (availableKeys.length === 0) return [];
-    availableKeys.sort((a, b) => a.usage_count - b.usage_count);
-    return [availableKeys[0]];
-  }
-
-  // Put a key on cooldown in memory and SQLite DB
-  private async setCooldown(keyId: number, durationMs: number = 60000): Promise<void> {
-    const cooldownTime = Date.now() + durationMs;
-    const key = this.keys.find((k) => k.id === keyId);
-    if (key) {
-      key.cooldown_until = cooldownTime;
-    }
-    await db.prepare('UPDATE llm_keys SET cooldown_until = ? WHERE id = ?').run(cooldownTime, keyId);
-  }
-
-  // Increment usage count of a key
-  private async incrementUsage(keyId: number): Promise<void> {
-    const key = this.keys.find((k) => k.id === keyId);
-    if (key) {
-      key.usage_count += 1;
-    }
-    await db.prepare('UPDATE llm_keys SET usage_count = usage_count + 1 WHERE id = ?').run(keyId);
-  }
-
-  // Log LLM call outcome in DB
-  private async logCall(provider: string, keyIndex: number, latencyMs: number, success: boolean, error?: string): Promise<void> {
-    await db.prepare(`
-      INSERT INTO llm_call_logs (provider, key_index, latency_ms, success, error)
-      VALUES (?, ?, ?, ?, ?)
-    `).run(provider, keyIndex, latencyMs, success ? 1 : 0, error || null);
-  }
-
-  // Primary method: Hybrid race in parallel to favor preferred accurate/reasoning provider
-  public async getChatCompletion(
-    preferredProvider: 'groq' | 'gemini' | 'openrouter',
-    params: LLMCallParams
-  ): Promise<string> {
-    await this.reloadKeys(); // Refresh latest cooldowns
+  public async reloadKeys() {
+    const rows = await db.all('SELECT provider, key_val FROM llm_keys WHERE active = 1');
+    this.keys = { groq: [], gemini: [], openrouter: [] };
     
-    // Pick the best key from each active provider to race in parallel (no rotation, simultaneous fetch)
-    const keysBatch = this.pickMultiProviderBatch();
+    for (const row of rows) {
+      if (row.provider === 'groq') this.keys.groq.push(row.key_val as string);
+      if (row.provider === 'gemini') this.keys.gemini.push(row.key_val as string);
+      if (row.provider === 'openrouter') this.keys.openrouter.push(row.key_val as string);
+    }
+    console.log(`[LLM] Loaded keys - Groq: ${this.keys.groq.length}, Gemini: ${this.keys.gemini.length}, OpenRouter: ${this.keys.openrouter.length}`);
+  }
+
+  // A very simple function that tries to classify intent using whichever API has keys
+  public async classifyIntent(message: string): Promise<{ intent: string, params: any }> {
+    if (this.keys.gemini.length > 0) {
+      return this.callGemini(message, this.keys.gemini[0]);
+    } else if (this.keys.groq.length > 0) {
+      return this.callGroq(message, this.keys.groq[0]);
+    }
     
-    if (keysBatch.length === 0) {
-      throw new Error('All LLM keys are currently in cooldown.');
+    // Fallback heuristic if no keys or API fails
+    return this.heuristicFallback(message);
+  }
+
+  public async generateResponse(message: string, context: string): Promise<string> {
+    const prompt = `Context: ${context}\n\nUser: ${message}\n\nYou are Vardan Hospital's AI Assistant. Respond in Hinglish or Hindi. Be helpful.`;
+    
+    if (this.keys.gemini.length > 0) {
+      return this.callGeminiText(prompt, this.keys.gemini[0]);
+    } else if (this.keys.groq.length > 0) {
+      return this.callGroqText(prompt, this.keys.groq[0]);
     }
 
-    if (keysBatch.length === 1) {
-      return this.runSingleKeyWithRetry(keysBatch[0], params);
-    }
+    return "Maaf kijiye, abhi system busy hai. Kripya thodi der baad message karein.";
+  }
 
-    interface RaceResult {
-      provider: string;
-      content: string;
-      latency: number;
-    }
+  private async callGemini(msg: string, key: string) {
+    const prompt = `Classify this message into one of these intents: "book_appointment", "faq", "small_talk", "talk_to_human".
+    Return ONLY JSON with this format: {"intent": "the_intent", "params": {}}.
+    Message: "${msg}"`;
 
-    const controllers = keysBatch.map(() => new AbortController());
-    
-    const executionPromises = keysBatch.map(async (keyRecord, index) => {
-      const controller = controllers[index];
-      const start = Date.now();
-      try {
-        const response = await this.executeCallWithController(
-          keyRecord.provider,
-          keyRecord.key_val,
-          params,
-          controller
-        );
-        const latency = Date.now() - start;
-
-        // Success: log usage & latency
-        await this.incrementUsage(keyRecord.id);
-        await this.logCall(keyRecord.provider, keyRecord.id, latency, true);
-        return { provider: keyRecord.provider, content: response, latency } as RaceResult;
-      } catch (err: any) {
-        if (controller.signal.aborted || err.name === 'AbortError' || err.message?.includes('aborted')) {
-          // Resolve silently to prevent UnhandledPromiseRejection when calls are aborted in the background
-          return { provider: keyRecord.provider, content: '', latency: 0 } as any;
-        }
-
-        const latency = Date.now() - start;
-        const errorMsg = err.message || String(err);
-        
-        // Key failed (rate limit/timeout) -> Cooldown key
-        await this.setCooldown(keyRecord.id, 60000);
-        await this.logCall(keyRecord.provider, keyRecord.id, latency, false, errorMsg);
-        throw err;
-      }
-    });
-
-    // Prevent unhandled promise rejections for background / losing promises in the race
-    executionPromises.forEach(p => p.catch(() => {}));
-
-    const preferredIndex = keysBatch.findIndex(k => k.provider === preferredProvider);
-    
-    if (preferredIndex !== -1) {
-      const preferredPromise = executionPromises[preferredIndex];
-      
-      // Let the preferred provider run for up to 5 seconds before falling back
-      let timeoutId: any;
-      const timeoutPromise = new Promise<null>((resolve) => {
-        timeoutId = setTimeout(() => resolve(null), 5000);
+    try {
+      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${key}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
       });
-
-      try {
-        const preferredResult = await Promise.race([preferredPromise, timeoutPromise]);
-        
-        // Check for non-null AND non-empty content
-        if (preferredResult !== null && preferredResult.content && preferredResult.content.trim().length > 0) {
-          clearTimeout(timeoutId);
-          // Abort all other runs since the preferred model responded successfully!
-          controllers.forEach((c, idx) => {
-            if (idx !== preferredIndex) c.abort();
-          });
-          return preferredResult.content;
-        } else {
-          clearTimeout(timeoutId);
-          console.log(`[LLM Race] Preferred provider "${preferredProvider}" timed out or returned empty. Falling back to fastest alternative.`);
-        }
-      } catch (err) {
-        clearTimeout(timeoutId);
-        console.log(`[LLM Race] Preferred provider "${preferredProvider}" failed. Falling back to other active responses.`);
-      }
+      const data = await res.json() as any;
+      const text = data.candidates[0].content.parts[0].text;
+      const clean = text.replace(/```json/g, '').replace(/```/g, '').trim();
+      return JSON.parse(clean);
+    } catch (e) {
+      console.error("[LLM] Gemini classification error:", e);
+      return this.heuristicFallback(msg);
     }
+  }
 
+  private async callGeminiText(prompt: string, key: string) {
     try {
-      // Return the fastest completed alternative response with non-empty content
-      const allResults = await Promise.any(
-        executionPromises.map(p => p.then(r => {
-          if (!r || !r.content || r.content.trim().length === 0) throw new Error('empty response');
-          return r;
-        }))
-      );
-      
-      // Abort other remaining controllers
-      controllers.forEach((c, idx) => {
-        if (keysBatch[idx].provider !== allResults.provider) {
-          c.abort();
-        }
+      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${key}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
       });
-      return allResults.content;
-    } catch (err) {
-      console.warn('All keys in the parallel batch failed. Retrying with backup key...');
-      
-      // Fallback: Pick next available key sequentially
-      await this.reloadKeys();
-      const fallbackKeys = this.pickSingleBackupKey();
-      if (fallbackKeys.length > 0) {
-        return this.runSingleKeyWithRetry(fallbackKeys[0], params);
-      }
-      throw new Error('All primary and backup LLM keys failed or are cooling down.');
+      const data = await res.json() as any;
+      return data.candidates[0].content.parts[0].text;
+    } catch (e) {
+      return "Main thodi der mein jawab deta hoon. Error aaya.";
     }
   }
 
-  // Run a single key with standard retry fallback
-  private async runSingleKeyWithRetry(
-    keyRecord: LLMKeyRecord,
-    params: LLMCallParams
-  ): Promise<string> {
-    const start = Date.now();
-    const controller = new AbortController();
+  private async callGroq(msg: string, key: string) {
+    const prompt = `Classify this message into one of these intents: "book_appointment", "faq", "small_talk", "talk_to_human". Return ONLY JSON. Message: "${msg}"`;
     try {
-      const response = await this.executeCallWithController(
-        keyRecord.provider,
-        keyRecord.key_val,
-        params,
-        controller
-      );
-      const latency = Date.now() - start;
-      await this.incrementUsage(keyRecord.id);
-      await this.logCall(keyRecord.provider, keyRecord.id, latency, true);
-      return response;
-    } catch (err: any) {
-      const latency = Date.now() - start;
-      const errorMsg = err.message || String(err);
-      await this.setCooldown(keyRecord.id, 60000);
-      await this.logCall(keyRecord.provider, keyRecord.id, latency, false, errorMsg);
-      throw err;
+      const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${key}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: 'llama3-8b-8192', messages: [{ role: 'user', content: prompt }] })
+      });
+      const data = await res.json() as any;
+      const text = data.choices[0].message.content;
+      return JSON.parse(text);
+    } catch (e) {
+      return this.heuristicFallback(msg);
     }
   }
 
-  private cleanThinkTags(content: string): string {
-    if (!content) return '';
-    return content.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
-  }
-
-  // Execute the REST API call with abort signal
-  private async executeCallWithController(
-    provider: 'groq' | 'gemini' | 'openrouter',
-    apiKey: string,
-    params: LLMCallParams,
-    controller: AbortController
-  ): Promise<string> {
-    return new Promise<string>(async (resolve, reject) => {
-      const timeoutId = setTimeout(() => {
-        controller.abort();
-        reject(new Error('LLM call timed out after 10 seconds'));
-      }, 10000);
-
-      try {
-        let result = '';
-        if (provider === 'groq') {
-          const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${apiKey}`
-            },
-            body: JSON.stringify({
-              model: 'llama-3.1-8b-instant',
-              messages: [
-                { role: 'system', content: params.systemPrompt },
-                { role: 'user', content: params.userPrompt }
-              ],
-              response_format: params.responseFormatJson ? { type: 'json_object' } : undefined,
-              temperature: 0.1
-            }),
-            signal: controller.signal
-          });
-
-          if (!response.ok) {
-            const errText = await response.text();
-            throw new Error(`Groq HTTP ${response.status}: ${errText}`);
-          }
-
-          const data = await response.json() as any;
-          result = this.cleanThinkTags(data.choices[0].message.content || '');
-
-        } else if (provider === 'gemini') {
-          const response = await fetch(
-            `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
-            {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json'
-              },
-              body: JSON.stringify({
-                contents: [
-                  {
-                    role: 'user',
-                    parts: [{ text: params.userPrompt }]
-                  }
-                ],
-                systemInstruction: {
-                  parts: [{ text: params.systemPrompt }]
-                },
-                generationConfig: {
-                  responseMimeType: params.responseFormatJson ? 'application/json' : 'text/plain',
-                  temperature: 0.1
-                }
-              }),
-              signal: controller.signal
-            }
-          );
-
-          if (!response.ok) {
-            const errText = await response.text();
-            throw new Error(`Gemini HTTP ${response.status}: ${errText}`);
-          }
-
-          const data = await response.json() as any;
-          result = this.cleanThinkTags(data.candidates[0].content.parts[0].text || '');
-
-        } else {
-          // OpenRouter
-          const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${apiKey}`,
-              'HTTP-Referer': 'https://vardan.ai',
-              'X-Title': 'VardanAI'
-            },
-            body: JSON.stringify({
-              model: 'google/gemini-2.5-flash',
-              messages: [
-                { role: 'system', content: params.systemPrompt },
-                { role: 'user', content: params.userPrompt }
-              ],
-              response_format: params.responseFormatJson ? { type: 'json_object' } : undefined,
-              temperature: 0.1
-            }),
-            signal: controller.signal
-          });
-
-          if (!response.ok) {
-            const errText = await response.text();
-            throw new Error(`OpenRouter HTTP ${response.status}: ${errText}`);
-          }
-
-          const data = await response.json() as any;
-          result = this.cleanThinkTags(data.choices[0].message.content || '');
-        }
-
-        clearTimeout(timeoutId);
-        resolve(result);
-      } catch (error: any) {
-        clearTimeout(timeoutId);
-        if (error.name === 'AbortError') {
-          reject(new Error('LLM call was aborted'));
-        } else {
-          reject(error);
-        }
-      }
-    });
-  }
-
-  // Analyze a document (PDF, Image, Text) using Gemini 1.5 Flash
-  public async analyzeDocument(
-    base64Data: string,
-    mimeType: string,
-    systemPrompt: string,
-    userPrompt: string
-  ): Promise<string> {
-    await this.reloadKeys();
-    const geminiKeys = this.keys.filter(
-      (k) => k.provider === 'gemini' && k.active === 1 && k.cooldown_until < Date.now()
-    );
-    if (geminiKeys.length === 0) {
-      throw new Error('No active Gemini API keys are available (all might be in cooldown).');
-    }
-    // Sort by usage count
-    geminiKeys.sort((a, b) => a.usage_count - b.usage_count);
-    const keyRecord = geminiKeys[0];
-
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 20000); // 20s timeout for document analysis
-
-    const start = Date.now();
+  private async callGroqText(prompt: string, key: string) {
     try {
-      // Strip any data URI prefix if present
-      const cleanBase64 = base64Data.replace(/^data:[^;]+;base64,/, '');
-
-      const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${keyRecord.key_val}`,
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            contents: [
-              {
-                role: 'user',
-                parts: [
-                  {
-                    inlineData: {
-                      mimeType: mimeType,
-                      data: cleanBase64
-                    }
-                  },
-                  {
-                    text: userPrompt
-                  }
-                ]
-              }
-            ],
-            systemInstruction: {
-              parts: [{ text: systemPrompt }]
-            },
-            generationConfig: {
-              responseMimeType: 'application/json',
-              temperature: 0.1
-            }
-          }),
-          signal: controller.signal
-        }
-      );
-
-      clearTimeout(timeoutId);
-      if (!response.ok) {
-        const errText = await response.text();
-        throw new Error(`Gemini HTTP ${response.status}: ${errText}`);
-      }
-
-      const data = await response.json() as any;
-      const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
-
-      await this.incrementUsage(keyRecord.id);
-      await this.logCall(keyRecord.provider, keyRecord.id, Date.now() - start, true);
-      return text;
-    } catch (err: any) {
-      clearTimeout(timeoutId);
-      await this.setCooldown(keyRecord.id, 60000);
-      await this.logCall(keyRecord.provider, keyRecord.id, Date.now() - start, false, err.message || String(err));
-      throw err;
+      const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${key}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: 'llama3-8b-8192', messages: [{ role: 'user', content: prompt }] })
+      });
+      const data = await res.json() as any;
+      return data.choices[0].message.content;
+    } catch (e) {
+      return "Maaf kijiye, abhi system busy hai.";
     }
   }
 
-  // Transcribe an audio file buffer (base64) using Gemini 1.5/3.5 Flash
-  public async transcribeAudio(
-    base64Data: string,
-    mimeType: string
-  ): Promise<string> {
-    await this.reloadKeys();
-    const geminiKeys = this.keys.filter(
-      (k) => k.provider === 'gemini' && k.active === 1 && k.cooldown_until < Date.now()
-    );
-    if (geminiKeys.length === 0) {
-      throw new Error('No active Gemini API keys are available for audio transcription.');
+  private heuristicFallback(msg: string) {
+    const l = msg.toLowerCase();
+    if (l.includes('appointment') || l.includes('book') || l.includes('doctor') || l.includes('dikha')) {
+      return { intent: 'book_appointment', params: {} };
     }
-    // Sort by usage count
-    geminiKeys.sort((a, b) => a.usage_count - b.usage_count);
-    const keyRecord = geminiKeys[0];
-
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 30000); // 30s timeout
-
-    const start = Date.now();
-    try {
-      // Strip any data URI prefix if present
-      const cleanBase64 = base64Data.replace(/^data:[^;]+;base64,/, '');
-
-      // Clean mimeType to ensure no parameters like ;codecs=opus are sent
-      let cleanMimeType = mimeType.split(';')[0].trim();
-      if (!cleanMimeType.startsWith('audio/')) {
-        cleanMimeType = 'audio/ogg'; // fallback
-      }
-
-      const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${keyRecord.key_val}`,
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            contents: [
-              {
-                role: 'user',
-                parts: [
-                  {
-                    inlineData: {
-                      mimeType: cleanMimeType,
-                      data: cleanBase64
-                    }
-                  },
-                  {
-                    text: "You are a speech-to-text transcriber for Vardan Hospital. Transcribe this audio exactly. Do not add any introductory or explanatory text. Respond with ONLY the text of the speech. If there is no speech, respond with an empty string."
-                  }
-                ]
-              }
-            ],
-            generationConfig: {
-              temperature: 0.1
-            }
-          }),
-          signal: controller.signal
-        }
-      );
-
-      clearTimeout(timeoutId);
-      if (!response.ok) {
-        const errText = await response.text();
-        throw new Error(`Gemini HTTP ${response.status}: ${errText}`);
-      }
-
-      const data = await response.json() as any;
-      const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
-
-      await this.incrementUsage(keyRecord.id);
-      await this.logCall(keyRecord.provider, keyRecord.id, Date.now() - start, true);
-      return text.trim();
-    } catch (err: any) {
-      clearTimeout(timeoutId);
-      await this.setCooldown(keyRecord.id, 60000);
-      await this.logCall(keyRecord.provider, keyRecord.id, Date.now() - start, false, err.message || String(err));
-      throw err;
+    if (l.includes('time') || l.includes('kab') || l.includes('address') || l.includes('kahan') || l.includes('fee')) {
+      return { intent: 'faq', params: {} };
     }
+    return { intent: 'small_talk', params: {} };
   }
 }
 
+export const llmGateway = new LLMGateway();
