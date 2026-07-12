@@ -164,41 +164,49 @@ export class LLMGateway {
     if (preferredIndex !== -1) {
       const preferredPromise = executionPromises[preferredIndex];
       
-      // Let the preferred reasoning provider run for up to 2.5 seconds
+      // Let the preferred provider run for up to 5 seconds before falling back
       let timeoutId: any;
       const timeoutPromise = new Promise<null>((resolve) => {
-        timeoutId = setTimeout(() => resolve(null), 2500);
+        timeoutId = setTimeout(() => resolve(null), 5000);
       });
 
       try {
         const preferredResult = await Promise.race([preferredPromise, timeoutPromise]);
         
-        if (preferredResult) {
+        // Check for non-null AND non-empty content
+        if (preferredResult !== null && preferredResult.content && preferredResult.content.trim().length > 0) {
           clearTimeout(timeoutId);
-          // Abort all other runs since the preferred accurate model won!
+          // Abort all other runs since the preferred model responded successfully!
           controllers.forEach((c, idx) => {
             if (idx !== preferredIndex) c.abort();
           });
           return preferredResult.content;
         } else {
-          console.log(`[LLM Race] Preferred provider "${preferredProvider}" took more than 2.5s. Falling back to the fastest completed response.`);
+          clearTimeout(timeoutId);
+          console.log(`[LLM Race] Preferred provider "${preferredProvider}" timed out or returned empty. Falling back to fastest alternative.`);
         }
       } catch (err) {
+        clearTimeout(timeoutId);
         console.log(`[LLM Race] Preferred provider "${preferredProvider}" failed. Falling back to other active responses.`);
       }
     }
 
     try {
-      // Return the fastest completed alternative response
-      const winner = await Promise.any(executionPromises);
+      // Return the fastest completed alternative response with non-empty content
+      const allResults = await Promise.any(
+        executionPromises.map(p => p.then(r => {
+          if (!r || !r.content || r.content.trim().length === 0) throw new Error('empty response');
+          return r;
+        }))
+      );
       
       // Abort other remaining controllers
       controllers.forEach((c, idx) => {
-        if (keysBatch[idx].provider !== winner.provider) {
+        if (keysBatch[idx].provider !== allResults.provider) {
           c.abort();
         }
       });
-      return winner.content;
+      return allResults.content;
     } catch (err) {
       console.warn('All keys in the parallel batch failed. Retrying with backup key...');
       
