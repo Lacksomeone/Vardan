@@ -157,8 +157,10 @@ export async function connectToWhatsApp() {
 
     // 7. Incoming messages
     sock.ev.on('messages.upsert', async (m) => {
+      console.log(`[WhatsApp] 📨 messages.upsert fired — type: ${m.type}, count: ${m.messages.length}`);
       if (m.type !== 'notify') return;
       for (const msg of m.messages) {
+        console.log(`[WhatsApp] 📩 Msg from: ${msg.key.remoteJid} | fromMe: ${msg.key.fromMe} | hasContent: ${!!msg.message}`);
         if (msg.key.fromMe || !msg.message) continue;
 
         // Deduplicate incoming messages using their unique message ID
@@ -176,9 +178,11 @@ export async function connectToWhatsApp() {
           }
         }
 
+        console.log(`[WhatsApp] ✅ Queuing message from ${msg.key.remoteJid} for processing...`);
         msgQueue.push(msg, (qMsg) => handleIncomingMessage(qMsg));
       }
     });
+
 
   } catch (err: any) {
     console.error('[WhatsApp] Fatal error:', err?.message);
