@@ -1,41 +1,68 @@
 import db from './db.js';
-import { AuthenticationCreds, AuthenticationState, initAuthCreds, SignalDataTypeMap, BufferJSON } from '@whiskeysockets/baileys';
+import { AuthenticationCreds, AuthenticationState, initAuthCreds, BufferJSON } from '@whiskeysockets/baileys';
 
 /**
- * Custom auth state for Baileys using the database
+ * Custom auth state for Baileys using the database.
+ * Uses an in-memory cache for ultra-fast reads and batches writes
+ * asynchronously to Turso to prevent Baileys from dropping connections.
  */
 export const useDatabaseAuthState = async (): Promise<{ state: AuthenticationState, saveCreds: () => Promise<void> }> => {
-  const readData = async (key: string) => {
-    try {
-      const row = (await db.prepare('SELECT value FROM whatsapp_auth WHERE id = ?').get(key)) as any;
-      if (row && row.value) {
-        return JSON.parse(row.value, BufferJSON.reviver);
+  const memoryAuth = new Map<string, string>();
+  const writeQueue = new Map<string, string | null>(); // null means delete
+
+  console.log('[WhatsAppAuth] Loading auth state from Turso into memory...');
+  try {
+    const rows = (await db.prepare('SELECT id, value FROM whatsapp_auth').all()) as any[];
+    for (const row of rows) {
+      if (row && row.id && row.value) {
+        memoryAuth.set(row.id, row.value);
       }
-      return null;
-    } catch (err) {
-      console.error(`[WhatsAppAuth] Error reading ${key}:`, err);
-      return null;
     }
-  };
+    console.log(`[WhatsAppAuth] Loaded ${memoryAuth.size} auth keys into memory.`);
+  } catch (err) {
+    console.error('[WhatsAppAuth] Error loading initial auth state:', err);
+  }
 
-  const writeData = async (key: string, data: any) => {
+  // Background worker to flush writeQueue to Turso every 5 seconds
+  setInterval(async () => {
+    if (writeQueue.size === 0) return;
+    
+    // Copy and clear the queue
+    const currentBatch = new Map(writeQueue);
+    writeQueue.clear();
+
+    const stmts: any[] = [];
+    for (const [key, val] of currentBatch.entries()) {
+      if (val !== null) {
+        stmts.push({
+          sql: 'INSERT INTO whatsapp_auth (id, value) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET value = excluded.value',
+          args: [key, val]
+        });
+      } else {
+        stmts.push({
+          sql: 'DELETE FROM whatsapp_auth WHERE id = ?',
+          args: [key]
+        });
+      }
+    }
+
     try {
-      const value = JSON.stringify(data, BufferJSON.replacer);
-      await db.prepare('INSERT INTO whatsapp_auth (id, value) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET value = ?').run(key, value, value);
+      // Execute as a single batch transaction to Turso
+      if (db.batch) {
+        await db.batch(stmts);
+      } else {
+        // Fallback if batch isn't strictly available
+        for (const stmt of stmts) {
+           await db.prepare(stmt.sql).run(...stmt.args);
+        }
+      }
     } catch (err) {
-      console.error(`[WhatsAppAuth] Error writing ${key}:`, err);
+      console.error(`[WhatsAppAuth] Error syncing ${stmts.length} keys to Turso in background:`, err);
     }
-  };
+  }, 5000);
 
-  const removeData = async (key: string) => {
-    try {
-      await db.prepare('DELETE FROM whatsapp_auth WHERE id = ?').run(key);
-    } catch (err) {
-      console.error(`[WhatsAppAuth] Error removing ${key}:`, err);
-    }
-  };
-
-  const creds: AuthenticationCreds = (await readData('creds')) || initAuthCreds();
+  const credsStr = memoryAuth.get('creds');
+  const creds: AuthenticationCreds = credsStr ? JSON.parse(credsStr, BufferJSON.reviver) : initAuthCreds();
 
   return {
     state: {
@@ -43,38 +70,41 @@ export const useDatabaseAuthState = async (): Promise<{ state: AuthenticationSta
       keys: {
         get: async (type: string, ids: string[]) => {
           const data: { [key: string]: any } = {};
-          await Promise.all(
-            ids.map(async (id) => {
-              let value = await readData(`${type}-${id}`);
-              if (type === 'app-state-sync-key' && value) {
-                 // The BufferJSON reviver handles the buffer decoding
+          for (const id of ids) {
+            const key = `${type}-${id}`;
+            const valueStr = memoryAuth.get(key);
+            if (valueStr) {
+              try {
+                data[id] = JSON.parse(valueStr, BufferJSON.reviver);
+              } catch (e) {
+                console.error(`[WhatsAppAuth] Error parsing key ${key} from memory`);
               }
-              if (value) {
-                data[id] = value;
-              }
-            })
-          );
+            }
+          }
           return data;
         },
         set: async (data: any) => {
-          const tasks: Promise<void>[] = [];
           for (const category in data) {
             for (const id in data[category]) {
               const value = data[category][id];
               const key = `${category}-${id}`;
               if (value) {
-                tasks.push(writeData(key, value));
+                const serialized = JSON.stringify(value, BufferJSON.replacer);
+                memoryAuth.set(key, serialized);
+                writeQueue.set(key, serialized);
               } else {
-                tasks.push(removeData(key));
+                memoryAuth.delete(key);
+                writeQueue.set(key, null);
               }
             }
           }
-          await Promise.all(tasks);
         }
       }
     },
-    saveCreds: () => {
-      return writeData('creds', creds);
+    saveCreds: async () => {
+      const serialized = JSON.stringify(creds, BufferJSON.replacer);
+      memoryAuth.set('creds', serialized);
+      writeQueue.set('creds', serialized);
     }
   };
 };

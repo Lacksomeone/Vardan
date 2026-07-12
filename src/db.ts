@@ -26,6 +26,7 @@ const client = createClient({
 const dbWrapper = {
   execute: (sql: string) => client.execute(sql),
   executeMultiple: (sql: string) => client.executeMultiple(sql),
+  batch: (stmts: any[]) => client.batch(stmts),
   prepare: (sql: string) => {
     return {
       get: async (...args: any[]) => {
