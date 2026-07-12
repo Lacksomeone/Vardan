@@ -251,112 +251,118 @@ export class LLMGateway {
     params: LLMCallParams,
     controller: AbortController
   ): Promise<string> {
-    const timeoutId = setTimeout(() => controller.abort(), 8000);
+    return new Promise<string>(async (resolve, reject) => {
+      const timeoutId = setTimeout(() => {
+        controller.abort();
+        reject(new Error('LLM call timed out after 10 seconds'));
+      }, 10000);
 
-    try {
-      if (provider === 'groq') {
-        const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${apiKey}`
-          },
-          body: JSON.stringify({
-            model: 'llama-3.1-8b-instant',
-            messages: [
-              { role: 'system', content: params.systemPrompt },
-              { role: 'user', content: params.userPrompt }
-            ],
-            response_format: params.responseFormatJson ? { type: 'json_object' } : undefined,
-            temperature: 0.1
-          }),
-          signal: controller.signal
-        });
-
-        clearTimeout(timeoutId);
-        if (!response.ok) {
-          const errText = await response.text();
-          throw new Error(`Groq HTTP ${response.status}: ${errText}`);
-        }
-
-        const data = await response.json() as any;
-        return this.cleanThinkTags(data.choices[0].message.content || '');
-
-      } else if (provider === 'gemini') {
-        const response = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
-          {
-
+      try {
+        let result = '';
+        if (provider === 'groq') {
+          const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
             method: 'POST',
             headers: {
-              'Content-Type': 'application/json'
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${apiKey}`
             },
             body: JSON.stringify({
-              contents: [
-                {
-                  role: 'user',
-                  parts: [{ text: params.userPrompt }]
-                }
+              model: 'llama-3.1-8b-instant',
+              messages: [
+                { role: 'system', content: params.systemPrompt },
+                { role: 'user', content: params.userPrompt }
               ],
-              systemInstruction: {
-                parts: [{ text: params.systemPrompt }]
-              },
-              generationConfig: {
-                responseMimeType: params.responseFormatJson ? 'application/json' : 'text/plain',
-                temperature: 0.1
-              }
+              response_format: params.responseFormatJson ? { type: 'json_object' } : undefined,
+              temperature: 0.1
             }),
             signal: controller.signal
+          });
+
+          if (!response.ok) {
+            const errText = await response.text();
+            throw new Error(`Groq HTTP ${response.status}: ${errText}`);
           }
-        );
 
-        clearTimeout(timeoutId);
-        if (!response.ok) {
-          const errText = await response.text();
-          throw new Error(`Gemini HTTP ${response.status}: ${errText}`);
+          const data = await response.json() as any;
+          result = this.cleanThinkTags(data.choices[0].message.content || '');
+
+        } else if (provider === 'gemini') {
+          const response = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
+            {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify({
+                contents: [
+                  {
+                    role: 'user',
+                    parts: [{ text: params.userPrompt }]
+                  }
+                ],
+                systemInstruction: {
+                  parts: [{ text: params.systemPrompt }]
+                },
+                generationConfig: {
+                  responseMimeType: params.responseFormatJson ? 'application/json' : 'text/plain',
+                  temperature: 0.1
+                }
+              }),
+              signal: controller.signal
+            }
+          );
+
+          if (!response.ok) {
+            const errText = await response.text();
+            throw new Error(`Gemini HTTP ${response.status}: ${errText}`);
+          }
+
+          const data = await response.json() as any;
+          result = this.cleanThinkTags(data.candidates[0].content.parts[0].text || '');
+
+        } else {
+          // OpenRouter
+          const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${apiKey}`,
+              'HTTP-Referer': 'https://vardan.ai',
+              'X-Title': 'VardanAI'
+            },
+            body: JSON.stringify({
+              model: 'google/gemini-2.5-flash',
+              messages: [
+                { role: 'system', content: params.systemPrompt },
+                { role: 'user', content: params.userPrompt }
+              ],
+              response_format: params.responseFormatJson ? { type: 'json_object' } : undefined,
+              temperature: 0.1
+            }),
+            signal: controller.signal
+          });
+
+          if (!response.ok) {
+            const errText = await response.text();
+            throw new Error(`OpenRouter HTTP ${response.status}: ${errText}`);
+          }
+
+          const data = await response.json() as any;
+          result = this.cleanThinkTags(data.choices[0].message.content || '');
         }
 
-        const data = await response.json() as any;
-        return this.cleanThinkTags(data.candidates[0].content.parts[0].text || '');
-
-      } else {
-        // OpenRouter
-        const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${apiKey}`,
-            'HTTP-Referer': 'https://vardan.ai',
-            'X-Title': 'VardanAI'
-          },
-          body: JSON.stringify({
-            model: 'google/gemini-2.5-flash',
-            messages: [
-              { role: 'system', content: params.systemPrompt },
-              { role: 'user', content: params.userPrompt }
-            ],
-            response_format: params.responseFormatJson ? { type: 'json_object' } : undefined,
-            temperature: 0.1
-          }),
-          signal: controller.signal
-        });
-
         clearTimeout(timeoutId);
-        if (!response.ok) {
-          const errText = await response.text();
-          throw new Error(`OpenRouter HTTP ${response.status}: ${errText}`);
+        resolve(result);
+      } catch (error: any) {
+        clearTimeout(timeoutId);
+        if (error.name === 'AbortError') {
+          reject(new Error('LLM call was aborted'));
+        } else {
+          reject(error);
         }
-
-        const data = await response.json() as any;
-        return this.cleanThinkTags(data.choices[0].message.content || '');
       }
-    } catch (error: any) {
-      clearTimeout(timeoutId);
-      if (error.name === 'AbortError') {
-        throw new Error('LLM call was aborted');
-      }
-      throw error;
-    }
+    });
   }
 
   // Analyze a document (PDF, Image, Text) using Gemini 1.5 Flash

@@ -46,7 +46,18 @@ class MessageQueue {
     if (this.running || this.queue.length === 0) return;
     this.running = true;
     const task = this.queue.shift()!;
-    try { await task.fn(task.message); } catch (e) { console.error('[Queue]', e); }
+    let timeoutId: any;
+    try {
+      // Race the handler task against a 25-second watchdog timer
+      const watchdog = new Promise<void>((_, reject) => {
+        timeoutId = setTimeout(() => reject(new Error('WhatsApp message handler timed out after 25s')), 25000);
+      });
+      await Promise.race([task.fn(task.message), watchdog]);
+      clearTimeout(timeoutId);
+    } catch (e) {
+      clearTimeout(timeoutId);
+      console.error('[Queue]', e);
+    }
     this.running = false;
     this.run();
   }
