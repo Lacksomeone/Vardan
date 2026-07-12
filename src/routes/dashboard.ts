@@ -810,7 +810,7 @@ router.get('/monitor/debug', (req, res) => {
     `).all() as any[];
 
     const recentLLMLogs = db.prepare(`
-      SELECT provider, latency_ms, success, substr(error_message, 1, 80) as error_preview, timestamp 
+      SELECT provider, latency_ms, success, substr(error, 1, 80) as error_preview, timestamp 
       FROM llm_call_logs 
       ORDER BY timestamp DESC 
       LIMIT 10
